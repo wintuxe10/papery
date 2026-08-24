@@ -142,3 +142,99 @@ button {
   flex: 1;
   padding: 10px;
 }
+
+.dialog-backdrop {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #3b3b3f;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.dialog-backdrop.open {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+#dialog {
+  background: #4d4d55;
+  border-radius: 10px;
+  padding: 18px;
+  width: 100%;
+  max-width: 420px;
+}
+
+#dialog h2 {
+  font-size: 18px;
+  margin-bottom: 14px;
+}
+
+.field {
+  margin-bottom: 12px;
+}
+
+.field label {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.field input,
+.field textarea,
+.field select,
+.card-row input {
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 6px;
+  background: #3b3b3f;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.card-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.reveal,
+.add-card,
+.remove-card {
+  width: auto;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: none;
+  color: #367dbe;
+  font-size: 12px;
+  font-weight: 400;
+  text-decoration: underline;
+}
+
+.remove-card {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+#dialog-error {
+  font-size: 13px;
+  margin-top: 4px;
+  color: #367dbe;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.dialog-actions button {
+  flex: 1;
+  padding: 10px;
+}

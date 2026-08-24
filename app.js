@@ -90,42 +90,25 @@ async function saveVault() {
 
 async function unlockOrCreateVault() {
   const hasVault = localStorage.getItem('vault_data') !== null;
-  if (hasVault) {
-    const pw = prompt('Enter your password to unlock:');
-    if (pw === null) {
-      alert('Cancelled. Reload the page when you are ready to unlock.');
-      throw new Error('unlock cancelled');
-    }
+
+  if (!hasVault) {
+    const pw = await askNewPassword();
+    if (pw === null) throw new Error('setup cancelled');
+    currentPassword = pw;
+    await saveVault();
+    return;
+  }
+
+  let problem = '';
+  while (true) {
+    const pw = await askPassword(problem);
+    if (pw === null) throw new Error('unlock cancelled');
     try {
       await decryptVault(pw);
       currentPassword = pw;
+      return;
     } catch (e) {
-      alert('Wrong password. Reload the page to try again.');
-      throw e;
-    }
-  } else {
-    while (true) {
-      const pw = prompt('First time setup — create a password for your vault (at least ' + MIN_PASSWORD + ' characters):');
-      if (pw === null) {
-        alert('Setup cancelled. No vault was created. Reload the page to start again.');
-        throw new Error('setup cancelled');
-      }
-      if (pw.length < MIN_PASSWORD) {
-        alert('That password is too short. Use at least ' + MIN_PASSWORD + ' characters.');
-        continue;
-      }
-      const again = prompt('Type the same password again to confirm:');
-      if (again === null) {
-        alert('Setup cancelled. No vault was created. Reload the page to start again.');
-        throw new Error('setup cancelled');
-      }
-      if (again !== pw) {
-        alert('Those two passwords did not match. Please try again.');
-        continue;
-      }
-      currentPassword = pw;
-      await saveVault();
-      break;
+      problem = 'Wrong password. Try again.';
     }
   }
 }
@@ -153,6 +136,217 @@ function setLink(item, type, otherType, otherId) {
   unlink(other, otherType, type);
   item[LINK_FIELD[otherType]] = other.id;
   other[LINK_FIELD[type]] = item.id;
+}
+
+const dialog = {
+  backdrop: document.getElementById('dialog-backdrop'),
+  form: document.getElementById('dialog'),
+  title: document.getElementById('dialog-title'),
+  fields: document.getElementById('dialog-fields'),
+  error: document.getElementById('dialog-error'),
+  submit: document.getElementById('dialog-submit'),
+  cancel: document.getElementById('dialog-cancel'),
+};
+
+let cancelDialog = null;
+
+function applyTypingRules(el) {
+  el.setAttribute('spellcheck', 'false');
+  el.setAttribute('autocapitalize', 'off');
+  el.setAttribute('autocorrect', 'off');
+}
+
+function makeField(spec) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+
+  const label = document.createElement('label');
+  label.textContent = spec.label;
+  label.setAttribute('for', 'f-' + spec.name);
+  wrap.appendChild(label);
+
+  let input;
+  if (spec.type === 'textarea') {
+    input = document.createElement('textarea');
+    input.rows = 4;
+  } else if (spec.type === 'select') {
+    input = document.createElement('select');
+    (spec.options || []).forEach((o) => {
+      const opt = document.createElement('option');
+      opt.value = o.value;
+      opt.textContent = o.label;
+      input.appendChild(opt);
+    });
+  } else {
+    input = document.createElement('input');
+    input.type = spec.type || 'text';
+  }
+
+  input.id = 'f-' + spec.name;
+  input.name = spec.name;
+  input.value = spec.value === undefined || spec.value === null ? '' : spec.value;
+
+  if (spec.type !== 'select') applyTypingRules(input);
+  if (spec.autocomplete) input.setAttribute('autocomplete', spec.autocomplete);
+  if (spec.minlength) input.setAttribute('minlength', String(spec.minlength));
+  if (spec.placeholder) input.setAttribute('placeholder', spec.placeholder);
+  if (spec.type === 'password') input.setAttribute('enterkeyhint', 'go');
+
+  wrap.appendChild(input);
+
+  if (spec.type === 'password') {
+    wrap.appendChild(textButton('Show password', () => {
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }, 'reveal'));
+  }
+
+  return { wrap, read: () => input.value, input: input };
+}
+
+function makeCardsField(spec) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field';
+  const label = document.createElement('label');
+  label.textContent = spec.label;
+  wrap.appendChild(label);
+
+  const rows = document.createElement('div');
+  wrap.appendChild(rows);
+
+  let data = (spec.value || []).slice();
+  const pairs = [];
+
+  function readRows() {
+    return pairs.map((p) => ({ front: p.front.value, back: p.back.value }));
+  }
+
+  function draw() {
+    rows.innerHTML = '';
+    pairs.length = 0;
+    data.forEach((card, i) => {
+      const row = document.createElement('div');
+      row.className = 'card-row';
+      const front = document.createElement('input');
+      front.type = 'text';
+      front.value = card.front || '';
+      front.setAttribute('placeholder', 'Question');
+      const back = document.createElement('input');
+      back.type = 'text';
+      back.value = card.back || '';
+      back.setAttribute('placeholder', 'Answer');
+      applyTypingRules(front);
+      applyTypingRules(back);
+      row.appendChild(front);
+      row.appendChild(back);
+      row.appendChild(textButton('Remove', () => {
+        data = readRows();
+        data.splice(i, 1);
+        draw();
+      }, 'remove-card'));
+      pairs.push({ front: front, back: back });
+      rows.appendChild(row);
+    });
+  }
+
+  draw();
+  wrap.appendChild(textButton('Add a card', () => {
+    data = readRows();
+    data.push({ front: '', back: '' });
+    draw();
+  }, 'add-card'));
+
+  return {
+    wrap: wrap,
+    read: () => readRows().filter((c) => c.front.trim() !== ''),
+  };
+}
+
+function openForm(config) {
+  return new Promise((resolve) => {
+    dialog.title.textContent = config.title;
+    dialog.submit.textContent = config.submitLabel || 'Save';
+    showError(config.error || '');
+
+    dialog.fields.innerHTML = '';
+    const readers = {};
+    let firstInput = null;
+    config.fields.forEach((spec) => {
+      const built = spec.type === 'cards' ? makeCardsField(spec) : makeField(spec);
+      dialog.fields.appendChild(built.wrap);
+      readers[spec.name] = built.read;
+      if (!firstInput && built.input) firstInput = built.input;
+    });
+
+    function finish(result) {
+      dialog.backdrop.classList.remove('open');
+      cancelDialog = null;
+      dialog.form.onsubmit = null;
+      resolve(result);
+    }
+    cancelDialog = () => finish(null);
+
+    dialog.form.onsubmit = (event) => {
+      if (event && event.preventDefault) event.preventDefault();
+      const values = {};
+      Object.keys(readers).forEach((name) => { values[name] = readers[name](); });
+      const problem = config.validate ? config.validate(values) : null;
+      if (problem) {
+        showError(problem);
+        return;
+      }
+      finish(values);
+    };
+
+    dialog.backdrop.classList.add('open');
+    if (firstInput && firstInput.focus) firstInput.focus();
+  });
+}
+
+function showError(message) {
+  dialog.error.textContent = message;
+  if (message) dialog.error.classList.remove('hidden');
+  else dialog.error.classList.add('hidden');
+}
+
+dialog.cancel.addEventListener('click', () => {
+  if (cancelDialog) cancelDialog();
+});
+
+if (document.addEventListener) {
+  document.addEventListener('keydown', (event) => {
+    if (event && event.key === 'Escape' && cancelDialog) cancelDialog();
+  });
+}
+
+function askPassword(problem) {
+  return openForm({
+    title: 'Unlock your vault',
+    submitLabel: 'Unlock',
+    error: problem,
+    fields: [{ name: 'pw', label: 'Password', type: 'password', autocomplete: 'current-password' }],
+  }).then((v) => (v ? v.pw : null));
+}
+
+function askNewPassword() {
+  return openForm({
+    title: 'Create your vault password',
+    submitLabel: 'Create vault',
+    fields: [
+      { name: 'pw', label: 'Password', type: 'password', autocomplete: 'new-password', minlength: MIN_PASSWORD },
+      { name: 'again', label: 'Type it again', type: 'password', autocomplete: 'new-password' },
+    ],
+    validate: (v) => {
+      if (v.pw.length < MIN_PASSWORD) return 'Use at least ' + MIN_PASSWORD + ' characters.';
+      if (v.pw !== v.again) return 'Those two passwords did not match.';
+      return null;
+    },
+  }).then((v) => (v ? v.pw : null));
+}
+
+function linkOptions(collection) {
+  const options = [{ value: '', label: '(none)' }];
+  vault[collection].forEach((item) => options.push({ value: item.id, label: labelOf(item) }));
+  return options;
 }
 
 const SECTION_OF = { notes: 'notes', events: 'calendar', decks: 'flashcards' };
@@ -353,30 +547,6 @@ function renderReview(list) {
   list.appendChild(panel);
 }
 
-function pickFromList(items, labelFn, promptText) {
-  if (items.length === 0) return null;
-  const listText = items.map((it, i) => `${i + 1}. ${labelFn(it)}`).join('\n');
-  const answer = prompt(`${promptText}\n${listText}\n(Enter a number, or leave blank to skip)`);
-  const index = parseInt(answer, 10) - 1;
-  if (isNaN(index) || !items[index]) return null;
-  return items[index];
-}
-
-function pickLink(items, labelFn, promptText, currentId) {
-  if (items.length === 0) return currentId;
-  const current = items.find((it) => it.id === currentId);
-  const listText = items.map((it, i) => `${i + 1}. ${labelFn(it)}`).join('\n');
-  const answer = prompt(
-    `${promptText}\nCurrently: ${current ? labelFn(current) : 'none'}\n${listText}` +
-    `\n(Enter a number, 0 to unlink, or leave blank to keep it as is)`
-  );
-  if (answer === null || answer.trim() === '') return currentId;
-  const index = parseInt(answer, 10) - 1;
-  if (index === -1) return null;
-  if (isNaN(index) || !items[index]) return currentId;
-  return items[index].id;
-}
-
 function isValidDate(text) {
   const value = String(text).trim();
   if (value.length !== 10) return false;
@@ -392,15 +562,54 @@ function isValidDate(text) {
     && when.getUTCDate() === day;
 }
 
-function askDate(current) {
-  let suggestion = current === undefined ? '' : current;
-  while (true) {
-    const answer = prompt('Event date (YYYY-MM-DD, e.g. 2026-08-30):', suggestion);
-    if (answer === null) return null;
-    if (isValidDate(answer)) return answer.trim();
-    alert('"' + answer + '" is not a real date. Please write it as YYYY-MM-DD, e.g. 2026-08-30.');
-    suggestion = answer;
-  }
+function noteForm(note) {
+  return openForm({
+    title: note ? 'Edit note' : 'New note',
+    fields: [
+      { name: 'title', label: 'Title', type: 'text', value: note ? note.title : '' },
+      { name: 'content', label: 'Content', type: 'textarea', value: note ? note.content : '' },
+      { name: 'event', label: 'Linked event', type: 'select',
+        value: note ? note.linkedEventId || '' : '', options: linkOptions('events') },
+      { name: 'deck', label: 'Linked deck', type: 'select',
+        value: note ? note.linkedDeckId || '' : '', options: linkOptions('decks') },
+    ],
+    validate: (v) => (v.title.trim() ? null : 'Please give this note a title.'),
+  });
+}
+
+function eventForm(ev) {
+  return openForm({
+    title: ev ? 'Edit event' : 'New event',
+    fields: [
+      { name: 'title', label: 'Title', type: 'text', value: ev ? ev.title : '' },
+      { name: 'date', label: 'Date', type: 'date', value: ev ? ev.date : '' },
+      { name: 'note', label: 'Linked note', type: 'select',
+        value: ev ? ev.linkedNoteId || '' : '', options: linkOptions('notes') },
+      { name: 'deck', label: 'Linked deck', type: 'select',
+        value: ev ? ev.linkedDeckId || '' : '', options: linkOptions('decks') },
+    ],
+    validate: (v) => {
+      if (!v.title.trim()) return 'Please give this event a title.';
+      if (!isValidDate(v.date)) return 'Please choose a date.';
+      return null;
+    },
+  });
+}
+
+function deckForm(deck) {
+  return openForm({
+    title: deck ? 'Edit deck' : 'New deck',
+    fields: [
+      { name: 'name', label: 'Deck name', type: 'text', value: deck ? deck.name : '' },
+      { name: 'cards', label: 'Cards', type: 'cards',
+        value: deck ? deck.cards : [{ front: '', back: '' }] },
+      { name: 'note', label: 'Linked note', type: 'select',
+        value: deck ? deck.linkedNoteId || '' : '', options: linkOptions('notes') },
+      { name: 'event', label: 'Linked event', type: 'select',
+        value: deck ? deck.linkedEventId || '' : '', options: linkOptions('events') },
+    ],
+    validate: (v) => (v.name.trim() ? null : 'Please give this deck a name.'),
+  });
 }
 
 function deleteItem(collection, id) {
@@ -424,105 +633,71 @@ async function confirmAndDelete(collection, item, label) {
 }
 
 async function editNote(note) {
-  const title = prompt('Note title:', note.title);
-  if (title === null) return;
-  const content = prompt('Note content:', note.content);
-  if (content === null) return;
-
-  note.title = title.trim() || note.title;
-  note.content = content;
-  setLink(note, 'notes', 'events', pickLink(vault.events, (e) => e.title, 'Link to an event?', note.linkedEventId));
-  setLink(note, 'notes', 'decks', pickLink(vault.decks, (d) => d.name, 'Link to a flashcard deck?', note.linkedDeckId));
+  const values = await noteForm(note);
+  if (!values) return;
+  note.title = values.title.trim();
+  note.content = values.content;
+  setLink(note, 'notes', 'events', values.event || null);
+  setLink(note, 'notes', 'decks', values.deck || null);
   await saveVault();
   renderAll();
 }
 
 async function editEvent(ev) {
-  const title = prompt('Event title:', ev.title);
-  if (title === null) return;
-  const date = askDate(ev.date);
-  if (date === null) return;
-
-  ev.title = title.trim() || ev.title;
-  ev.date = date;
-  setLink(ev, 'events', 'notes', pickLink(vault.notes, (n) => n.title, 'Link to a note?', ev.linkedNoteId));
-  setLink(ev, 'events', 'decks', pickLink(vault.decks, (d) => d.name, 'Link to a flashcard deck?', ev.linkedDeckId));
+  const values = await eventForm(ev);
+  if (!values) return;
+  ev.title = values.title.trim();
+  ev.date = values.date;
+  setLink(ev, 'events', 'notes', values.note || null);
+  setLink(ev, 'events', 'decks', values.deck || null);
   await saveVault();
   renderAll();
 }
 
 async function editDeck(deck) {
-  const name = prompt('Deck name:', deck.name);
-  if (name === null) return;
-
-  deck.name = name.trim() || deck.name;
-  setLink(deck, 'decks', 'notes', pickLink(vault.notes, (n) => n.title, 'Link to a note?', deck.linkedNoteId));
-  setLink(deck, 'decks', 'events', pickLink(vault.events, (e) => e.title, 'Link to an event?', deck.linkedEventId));
-
-  const replace = confirm(
-    `Replace the ${deck.cards.length} card(s) in this deck?\n` +
-    `OK = enter them again from scratch, Cancel = keep them as they are.`
-  );
-  if (replace) {
-    const cards = [];
-    while (true) {
-      const front = prompt('Card front (question) — leave blank to stop adding cards:');
-      if (!front) break;
-      const back = prompt('Card back (answer):') || '';
-      cards.push({ front, back });
-    }
-    deck.cards = cards;
-    if (reviewState && reviewState.deckId === deck.id) reviewState = null;
-  }
+  const values = await deckForm(deck);
+  if (!values) return;
+  deck.name = values.name.trim();
+  deck.cards = values.cards;
+  setLink(deck, 'decks', 'notes', values.note || null);
+  setLink(deck, 'decks', 'events', values.event || null);
+  if (reviewState && reviewState.deckId === deck.id) reviewState = null;
   await saveVault();
   renderAll();
 }
 
 document.getElementById('add-note-btn').addEventListener('click', async () => {
-  const title = prompt('Note title:');
-  if (!title) return;
-  const content = prompt('Note content:') || '';
-  const linkedEvent = pickFromList(vault.events, (e) => e.title, 'Link to an event?');
-  const linkedDeck = pickFromList(vault.decks, (d) => d.name, 'Link to a flashcard deck?');
-  const note = { id: uid(), title, content, linkedEventId: null, linkedDeckId: null };
+  const values = await noteForm(null);
+  if (!values) return;
+  const note = { id: uid(), title: values.title.trim(), content: values.content,
+                 linkedEventId: null, linkedDeckId: null };
   vault.notes.push(note);
-  setLink(note, 'notes', 'events', linkedEvent ? linkedEvent.id : null);
-  setLink(note, 'notes', 'decks', linkedDeck ? linkedDeck.id : null);
+  setLink(note, 'notes', 'events', values.event || null);
+  setLink(note, 'notes', 'decks', values.deck || null);
   await saveVault();
   renderAll();
 });
 
 document.getElementById('add-event-btn').addEventListener('click', async () => {
-  const title = prompt('Event title:');
-  if (!title) return;
-  const date = askDate();
-  if (date === null) return;
-  const linkedNote = pickFromList(vault.notes, (n) => n.title, 'Link to a note?');
-  const linkedDeck = pickFromList(vault.decks, (d) => d.name, 'Link to a flashcard deck?');
-  const ev = { id: uid(), title, date, linkedNoteId: null, linkedDeckId: null };
+  const values = await eventForm(null);
+  if (!values) return;
+  const ev = { id: uid(), title: values.title.trim(), date: values.date,
+               linkedNoteId: null, linkedDeckId: null };
   vault.events.push(ev);
-  setLink(ev, 'events', 'notes', linkedNote ? linkedNote.id : null);
-  setLink(ev, 'events', 'decks', linkedDeck ? linkedDeck.id : null);
+  setLink(ev, 'events', 'notes', values.note || null);
+  setLink(ev, 'events', 'decks', values.deck || null);
   await saveVault();
   renderAll();
 });
 
 document.getElementById('add-deck-btn').addEventListener('click', async () => {
-  const name = prompt('Deck name:');
-  if (!name) return;
-  const cards = [];
-  while (true) {
-    const front = prompt('Card front (question) — leave blank to stop adding cards:');
-    if (!front) break;
-    const back = prompt('Card back (answer):') || '';
-    cards.push({ front, back });
-  }
-  const linkedNote = pickFromList(vault.notes, (n) => n.title, 'Link to a note?');
-  const linkedEvent = pickFromList(vault.events, (e) => e.title, 'Link to an event?');
-  const deck = { id: uid(), name, cards, linkedNoteId: null, linkedEventId: null };
+  const values = await deckForm(null);
+  if (!values) return;
+  const deck = { id: uid(), name: values.name.trim(), cards: values.cards,
+                 linkedNoteId: null, linkedEventId: null };
   vault.decks.push(deck);
-  setLink(deck, 'decks', 'notes', linkedNote ? linkedNote.id : null);
-  setLink(deck, 'decks', 'events', linkedEvent ? linkedEvent.id : null);
+  setLink(deck, 'decks', 'notes', values.note || null);
+  setLink(deck, 'decks', 'events', values.event || null);
   await saveVault();
   renderAll();
 });
@@ -531,4 +706,6 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js');
 }
 
-unlockOrCreateVault().then(renderAll).catch(() => {});
+unlockOrCreateVault().then(renderAll).catch(() => {
+  alert('The vault stays locked. Reload the page to try again.');
+});
