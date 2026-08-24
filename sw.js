@@ -1,4 +1,4 @@
-const CACHE_NAME = 'papery-v7';
+const CACHE_NAME = 'papery-v9';
 
 const FILES_TO_CACHE = [
   './',
@@ -10,26 +10,36 @@ const FILES_TO_CACHE = [
   './icon-512.png',
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(FILES_TO_CACHE))
-  );
+self.addEventListener('install', function (event) {
+  event.waitUntil(saveEverything());
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      )
-    )
-  );
+async function saveEverything() {
+  const cache = await caches.open(CACHE_NAME);
+  await cache.addAll(FILES_TO_CACHE);
+}
+
+self.addEventListener('activate', function (event) {
+  event.waitUntil(deleteOldDrawers());
 });
 
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      return cachedResponse || fetch(event.request);
-    })
-  );
+async function deleteOldDrawers() {
+  const names = await caches.keys();
+  for (let i = 0; i < names.length; i++) {
+    if (names[i] !== CACHE_NAME) {
+      await caches.delete(names[i]);
+    }
+  }
+}
+
+self.addEventListener('fetch', function (event) {
+  event.respondWith(answerFor(event.request));
 });
+
+async function answerFor(request) {
+  const saved = await caches.match(request);
+  if (saved) {
+    return saved;
+  }
+  return fetch(request);
+}

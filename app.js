@@ -1,49 +1,90 @@
 const navButtons = document.querySelectorAll('.nav-btn');
-const sections = {
-  notes: document.getElementById('notes-section'),
-  calendar: document.getElementById('calendar-section'),
-  flashcards: document.getElementById('flashcards-section'),
-};
+
+const sections = [
+  { key: 'notes', el: document.getElementById('notes-section') },
+  { key: 'calendar', el: document.getElementById('calendar-section') },
+  { key: 'flashcards', el: document.getElementById('flashcards-section') },
+];
 
 function showSection(key) {
-  navButtons.forEach((b) => b.classList.remove('active'));
-  const btn = document.getElementById('nav-' + key);
-  if (btn) btn.classList.add('active');
+  navButtons.forEach(function (button) {
+    button.classList.remove('active');
+  });
 
-  Object.values(sections).forEach((sec) => sec.classList.add('hidden'));
-  sections[key].classList.remove('hidden');
+  const button = document.getElementById('nav-' + key);
+  if (button) {
+    button.classList.add('active');
+  }
+
+  sections.forEach(function (section) {
+    if (section.key === key) {
+      section.el.classList.remove('hidden');
+    } else {
+      section.el.classList.add('hidden');
+    }
+  });
 }
 
-navButtons.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    showSection(btn.id.replace('nav-', ''));
+navButtons.forEach(function (button) {
+  button.addEventListener('click', function () {
+    showSection(button.id.replace('nav-', ''));
   });
 });
 
 let vault = { notes: [], events: [], decks: [] };
 
 function uid() {
-  return Math.random().toString(36).slice(2, 10);
+  const letters = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let id = '';
+  for (let i = 0; i < 8; i++) {
+    const position = Math.floor(Math.random() * letters.length);
+    id = id + letters[position];
+  }
+  return id;
+}
+
+function listOf(collection) {
+  if (collection === 'notes') {
+    return vault.notes;
+  }
+  if (collection === 'events') {
+    return vault.events;
+  }
+  return vault.decks;
 }
 
 function findIn(collection, id) {
-  if (!id) return null;
-  return vault[collection].find((item) => item.id === id) || null;
+  if (!id) {
+    return null;
+  }
+  const list = listOf(collection);
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === id) {
+      return list[i];
+    }
+  }
+  return null;
 }
 
 function labelOf(item) {
-  return item.title !== undefined ? item.title : item.name;
+  if (item.title !== undefined) {
+    return item.title;
+  }
+  return item.name;
 }
 
 async function deriveKey(password, salt) {
-  const enc = new TextEncoder();
+  const encoder = new TextEncoder();
+  const passwordBytes = encoder.encode(password);
+
   const keyMaterial = await crypto.subtle.importKey(
-    'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']
+    'raw', passwordBytes, 'PBKDF2', false, ['deriveKey']
   );
+
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt,
+      salt: salt,
       iterations: 600000,
       hash: 'SHA-256',
     },
@@ -54,30 +95,49 @@ async function deriveKey(password, salt) {
   );
 }
 
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let text = '';
+  for (let i = 0; i < bytes.length; i++) {
+    text = text + String.fromCharCode(bytes[i]);
+  }
+  return btoa(text);
+}
+
+function fromBase64(text) {
+  const characters = atob(text);
+  const bytes = new Uint8Array(characters.length);
+  for (let i = 0; i < characters.length; i++) {
+    bytes[i] = characters.charCodeAt(i);
+  }
+  return bytes;
+}
+
 async function encryptVault(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveKey(password, salt);
-  const enc = new TextEncoder();
-  const data = enc.encode(JSON.stringify(vault));
-  const cipherBuffer = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
 
-  const toB64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const encoder = new TextEncoder();
+  const plainBytes = encoder.encode(JSON.stringify(vault));
 
-  localStorage.setItem('vault_data', toB64(cipherBuffer));
-  localStorage.setItem('vault_salt', toB64(salt));
-  localStorage.setItem('vault_iv', toB64(iv));
+  const secret = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, plainBytes);
+
+  localStorage.setItem('vault_data', toBase64(secret));
+  localStorage.setItem('vault_salt', toBase64(salt));
+  localStorage.setItem('vault_iv', toBase64(iv));
 }
 
 async function decryptVault(password) {
-  const fromB64 = (str) => Uint8Array.from(atob(str), (c) => c.charCodeAt(0));
-  const salt = fromB64(localStorage.getItem('vault_salt'));
-  const iv = fromB64(localStorage.getItem('vault_iv'));
-  const cipherBytes = fromB64(localStorage.getItem('vault_data'));
+  const salt = fromBase64(localStorage.getItem('vault_salt'));
+  const iv = fromBase64(localStorage.getItem('vault_iv'));
+  const secret = fromBase64(localStorage.getItem('vault_data'));
+
   const key = await deriveKey(password, salt);
-  const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipherBytes);
-  const dec = new TextDecoder();
-  vault = JSON.parse(dec.decode(plainBuffer));
+  const plainBytes = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, key, secret);
+
+  const decoder = new TextDecoder();
+  vault = JSON.parse(decoder.decode(plainBytes));
 }
 
 let currentPassword = null;
@@ -90,48 +150,108 @@ async function unlockOrCreateVault() {
   const hasVault = localStorage.getItem('vault_data') !== null;
 
   if (!hasVault) {
-    let pw = null;
-    while (pw === null) pw = await askNewPassword();
-    currentPassword = pw;
+    let password = null;
+    while (password === null) {
+      password = await askNewPassword();
+    }
+    currentPassword = password;
     await saveVault();
     return;
   }
 
   while (true) {
-    const pw = await askPassword();
-    if (pw === null) continue;
+    const password = await askPassword();
+    if (password === null) {
+      continue;
+    }
     try {
-      await decryptVault(pw);
-      currentPassword = pw;
+      await decryptVault(password);
+      currentPassword = password;
       return;
-    } catch (e) {
+    } catch (error) {
     }
   }
 }
 
-const LINK_FIELD = {
-  notes: 'linkedNoteId',
-  events: 'linkedEventId',
-  decks: 'linkedDeckId',
-};
+function getLink(item, otherType) {
+  if (otherType === 'notes') {
+    return item.linkedNoteId;
+  }
+  if (otherType === 'events') {
+    return item.linkedEventId;
+  }
+  return item.linkedDeckId;
+}
+
+function putLink(item, otherType, value) {
+  if (otherType === 'notes') {
+    item.linkedNoteId = value;
+  } else if (otherType === 'events') {
+    item.linkedEventId = value;
+  } else {
+    item.linkedDeckId = value;
+  }
+}
 
 function unlink(item, type, otherType) {
-  const field = LINK_FIELD[otherType];
-  const otherId = item[field];
-  if (!otherId) return;
-  item[field] = null;
+  const otherId = getLink(item, otherType);
+  if (!otherId) {
+    return;
+  }
+  putLink(item, otherType, null);
+
   const other = findIn(otherType, otherId);
-  if (other && other[LINK_FIELD[type]] === item.id) other[LINK_FIELD[type]] = null;
+  if (other && getLink(other, type) === item.id) {
+    putLink(other, type, null);
+  }
 }
 
 function setLink(item, type, otherType, otherId) {
   unlink(item, type, otherType);
-  if (!otherId) return;
+  if (!otherId) {
+    return;
+  }
   const other = findIn(otherType, otherId);
-  if (!other) return;
+  if (!other) {
+    return;
+  }
   unlink(other, otherType, type);
-  item[LINK_FIELD[otherType]] = other.id;
-  other[LINK_FIELD[type]] = item.id;
+  putLink(item, otherType, other.id);
+  putLink(other, type, item.id);
+}
+
+function forEachItem(job) {
+  vault.notes.forEach(job);
+  vault.events.forEach(job);
+  vault.decks.forEach(job);
+}
+
+function clearLinksTo(id) {
+  forEachItem(function (item) {
+    if (item.linkedNoteId === id) {
+      item.linkedNoteId = null;
+    }
+    if (item.linkedEventId === id) {
+      item.linkedEventId = null;
+    }
+    if (item.linkedDeckId === id) {
+      item.linkedDeckId = null;
+    }
+  });
+}
+
+function deleteItem(collection, id) {
+  const list = listOf(collection);
+  let position = -1;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === id) {
+      position = i;
+    }
+  }
+  if (position !== -1) {
+    list.splice(position, 1);
+  }
+  clearLinksTo(id);
 }
 
 const dialog = {
@@ -145,10 +265,10 @@ const dialog = {
 
 let cancelDialog = null;
 
-function applyTypingRules(el) {
-  el.setAttribute('spellcheck', 'false');
-  el.setAttribute('autocapitalize', 'off');
-  el.setAttribute('autocorrect', 'off');
+function applyTypingRules(element) {
+  element.setAttribute('spellcheck', 'false');
+  element.setAttribute('autocapitalize', 'off');
+  element.setAttribute('autocorrect', 'off');
 }
 
 function makeField(spec) {
@@ -166,36 +286,55 @@ function makeField(spec) {
     input.rows = 4;
   } else if (spec.type === 'select') {
     input = document.createElement('select');
-    (spec.options || []).forEach((o) => {
-      const opt = document.createElement('option');
-      opt.value = o.value;
-      opt.textContent = o.label;
-      input.appendChild(opt);
-    });
+    if (spec.options) {
+      spec.options.forEach(function (option) {
+        const optionElement = document.createElement('option');
+        optionElement.value = option.value;
+        optionElement.textContent = option.label;
+        input.appendChild(optionElement);
+      });
+    }
   } else {
     input = document.createElement('input');
-    input.type = spec.type || 'text';
+    if (spec.type) {
+      input.type = spec.type;
+    } else {
+      input.type = 'text';
+    }
   }
 
   input.id = 'f-' + spec.name;
   input.name = spec.name;
-  input.value = spec.value === undefined || spec.value === null ? '' : spec.value;
-
-  if (spec.type !== 'select') applyTypingRules(input);
-  if (spec.autocomplete) input.setAttribute('autocomplete', spec.autocomplete);
-  if (spec.required) input.setAttribute('required', '');
-  if (spec.placeholder) input.setAttribute('placeholder', spec.placeholder);
-  if (spec.type === 'password') input.setAttribute('enterkeyhint', 'go');
-
-  wrap.appendChild(input);
-
-  if (spec.type === 'password') {
-    wrap.appendChild(textButton('Show password', () => {
-      input.type = input.type === 'password' ? 'text' : 'password';
-    }, 'reveal'));
+  if (spec.value === undefined || spec.value === null) {
+    input.value = '';
+  } else {
+    input.value = spec.value;
   }
 
-  return { wrap, read: () => input.value, input: input };
+  if (spec.type !== 'select') {
+    applyTypingRules(input);
+  }
+  if (spec.autocomplete) {
+    input.setAttribute('autocomplete', spec.autocomplete);
+  }
+  if (spec.required) {
+    input.setAttribute('required', '');
+  }
+  if (spec.placeholder) {
+    input.setAttribute('placeholder', spec.placeholder);
+  }
+  if (spec.type === 'password') {
+    input.setAttribute('enterkeyhint', 'go');
+  }
+
+  wrap.appendChild(input);
+  return {
+    wrap: wrap,
+    input: input,
+    read: function () {
+      return input.value;
+    },
+  };
 }
 
 function makeCardsField(spec) {
@@ -208,43 +347,57 @@ function makeCardsField(spec) {
   const rows = document.createElement('div');
   wrap.appendChild(rows);
 
-  let data = (spec.value || []).slice();
+  let data = [];
+  if (spec.value) {
+    spec.value.forEach(function (card) {
+      data.push({ front: card.front, back: card.back });
+    });
+  }
+
   const pairs = [];
 
   function readRows() {
-    return pairs.map((p) => ({ front: p.front.value, back: p.back.value }));
+    const result = [];
+    pairs.forEach(function (pair) {
+      result.push({ front: pair.front.value, back: pair.back.value });
+    });
+    return result;
   }
 
   function draw() {
     rows.innerHTML = '';
     pairs.length = 0;
-    data.forEach((card, i) => {
+    data.forEach(function (card, index) {
       const row = document.createElement('div');
       row.className = 'card-row';
+
       const front = document.createElement('input');
       front.type = 'text';
-      front.value = card.front || '';
+      front.value = card.front;
       front.setAttribute('placeholder', 'Question');
+      applyTypingRules(front);
+
       const back = document.createElement('input');
       back.type = 'text';
-      back.value = card.back || '';
+      back.value = card.back;
       back.setAttribute('placeholder', 'Answer');
-      applyTypingRules(front);
       applyTypingRules(back);
+
       row.appendChild(front);
       row.appendChild(back);
-      row.appendChild(iconButton('close', 'Remove', () => {
+      row.appendChild(iconButton('close', 'Remove', function () {
         data = readRows();
-        data.splice(i, 1);
+        data.splice(index, 1);
         draw();
       }, 'remove-card'));
+
       pairs.push({ front: front, back: back });
       rows.appendChild(row);
     });
   }
 
   draw();
-  wrap.appendChild(iconButton('add', 'Add a card', () => {
+  wrap.appendChild(iconButton('add', 'Add a card', function () {
     data = readRows();
     data.push({ front: '', back: '' });
     draw();
@@ -252,23 +405,43 @@ function makeCardsField(spec) {
 
   return {
     wrap: wrap,
-    read: () => readRows().filter((c) => c.front.trim() !== ''),
+    read: function () {
+      const kept = [];
+      readRows().forEach(function (card) {
+        if (card.front.trim() !== '') {
+          kept.push(card);
+        }
+      });
+      return kept;
+    },
   };
 }
 
 function openForm(config) {
-  return new Promise((resolve) => {
+  return new Promise(function (resolve) {
     dialog.title.textContent = config.title;
-    dialog.submit.textContent = config.submitLabel || 'Save';
+    if (config.submitLabel) {
+      dialog.submit.textContent = config.submitLabel;
+    } else {
+      dialog.submit.textContent = 'Save';
+    }
 
     dialog.fields.innerHTML = '';
-    const readers = {};
+
+    const readers = [];
     let firstInput = null;
-    config.fields.forEach((spec) => {
-      const built = spec.type === 'cards' ? makeCardsField(spec) : makeField(spec);
+    config.fields.forEach(function (spec) {
+      let built;
+      if (spec.type === 'cards') {
+        built = makeCardsField(spec);
+      } else {
+        built = makeField(spec);
+      }
       dialog.fields.appendChild(built.wrap);
-      readers[spec.name] = built.read;
-      if (!firstInput && built.input) firstInput = built.input;
+      readers.push({ name: spec.name, read: built.read });
+      if (!firstInput && built.input) {
+        firstInput = built.input;
+      }
     });
 
     function finish(result) {
@@ -277,63 +450,82 @@ function openForm(config) {
       dialog.form.onsubmit = null;
       resolve(result);
     }
-    cancelDialog = () => finish(null);
 
-    dialog.form.onsubmit = (event) => {
-      if (event && event.preventDefault) event.preventDefault();
+    cancelDialog = function () {
+      finish(null);
+    };
+
+    dialog.form.onsubmit = function (event) {
+      if (event && event.preventDefault) {
+        event.preventDefault();
+      }
+
       const values = {};
-      Object.keys(readers).forEach((name) => { values[name] = readers[name](); });
-      if (config.check && !config.check(values)) return;
+      readers.forEach(function (reader) {
+        values[reader.name] = reader.read();
+      });
+
+      if (config.check && !config.check(values)) {
+        return;
+      }
       finish(values);
     };
 
     dialog.backdrop.classList.add('open');
-    if (firstInput && firstInput.focus) firstInput.focus();
+    if (firstInput && firstInput.focus) {
+      firstInput.focus();
+    }
   });
 }
 
-dialog.cancel.addEventListener('click', () => {
-  if (cancelDialog) cancelDialog();
+dialog.cancel.addEventListener('click', function () {
+  if (cancelDialog) {
+    cancelDialog();
+  }
 });
 
-if (document.addEventListener) {
-  document.addEventListener('keydown', (event) => {
-    if (event && event.key === 'Escape' && cancelDialog) cancelDialog();
-  });
-}
+document.addEventListener('keydown', function (event) {
+  if (event && event.key === 'Escape' && cancelDialog) {
+    cancelDialog();
+  }
+});
 
-function askPassword() {
-  return openForm({
+async function askPassword() {
+  const values = await openForm({
     title: 'Unlock your vault',
     submitLabel: 'Unlock',
-    fields: [{ name: 'pw', label: 'Password', type: 'password',
-               autocomplete: 'current-password', required: true }],
-  }).then((v) => (v ? v.pw : null));
+    fields: [
+      { name: 'pw', label: 'Password', type: 'password',
+        autocomplete: 'current-password', required: true },
+    ],
+  });
+  if (!values) {
+    return null;
+  }
+  return values.pw;
 }
 
-function askNewPassword() {
-  return openForm({
+async function askNewPassword() {
+  const values = await openForm({
     title: 'Create your vault password',
     submitLabel: 'Create vault',
-    fields: [{ name: 'pw', label: 'Password', type: 'password',
-               autocomplete: 'new-password', required: true }],
-  }).then((v) => (v ? v.pw : null));
+    fields: [
+      { name: 'pw', label: 'Password', type: 'password',
+        autocomplete: 'new-password', required: true },
+    ],
+  });
+  if (!values) {
+    return null;
+  }
+  return values.pw;
 }
 
 function linkOptions(collection) {
   const options = [{ value: '', label: '(none)' }];
-  vault[collection].forEach((item) => options.push({ value: item.id, label: labelOf(item) }));
+  listOf(collection).forEach(function (item) {
+    options.push({ value: item.id, label: labelOf(item) });
+  });
   return options;
-}
-
-const SECTION_OF = { notes: 'notes', events: 'calendar', decks: 'flashcards' };
-
-const cardEls = {};
-
-function renderAll() {
-  renderNotes();
-  renderCalendar();
-  renderFlashcards();
 }
 
 const ICONS = {
@@ -344,31 +536,39 @@ const ICONS = {
   close: 'm256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z',
 };
 
+const cardEls = {};
+
 function iconButton(iconName, label, onClick, className) {
-  const btn = document.createElement('button');
-  btn.innerHTML =
+  const button = document.createElement('button');
+  button.innerHTML =
     '<svg class="icon" viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true" focusable="false">' +
     '<path d="' + ICONS[iconName] + '"/></svg>';
-  btn.title = label;
-  btn.setAttribute('aria-label', label);
-  if (className) btn.className = className;
-  btn.addEventListener('click', onClick);
-  return btn;
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  if (className) {
+    button.className = className;
+  }
+  button.addEventListener('click', onClick);
+  return button;
 }
 
 function textButton(label, onClick, className) {
-  const btn = document.createElement('button');
-  btn.textContent = label;
-  if (className) btn.className = className;
-  btn.addEventListener('click', onClick);
-  return btn;
+  const button = document.createElement('button');
+  button.textContent = label;
+  if (className) {
+    button.className = className;
+  }
+  button.addEventListener('click', onClick);
+  return button;
 }
 
 function textLine(tag, text, className) {
-  const el = document.createElement(tag);
-  el.textContent = text;
-  if (className) el.className = className;
-  return el;
+  const element = document.createElement(tag);
+  element.textContent = text;
+  if (className) {
+    element.className = className;
+  }
+  return element;
 }
 
 function cardShell(item) {
@@ -379,15 +579,29 @@ function cardShell(item) {
   return div;
 }
 
-function addCardActions(cardEl, buttons) {
+function addCardActions(cardElement, buttons) {
   const actions = document.createElement('div');
   actions.className = 'card-actions';
-  buttons.forEach((b) => actions.appendChild(b));
-  cardEl.appendChild(actions);
+  buttons.forEach(function (button) {
+    actions.appendChild(button);
+  });
+  cardElement.appendChild(actions);
+}
+
+function sectionForType(type) {
+  if (type === 'notes') {
+    return 'notes';
+  }
+  if (type === 'events') {
+    return 'calendar';
+  }
+  return 'flashcards';
 }
 
 function linkRow(prefix, target, targetType) {
-  const row = textButton(prefix + labelOf(target), () => goToItem(targetType, target.id), 'link-row');
+  const row = textButton(prefix + labelOf(target), function () {
+    goToItem(targetType, target.id);
+  }, 'link-row');
   row.type = 'button';
   return row;
 }
@@ -397,48 +611,90 @@ function goToItem(type, id) {
     reviewState = null;
     renderFlashcards();
   }
-  showSection(SECTION_OF[type]);
+  showSection(sectionForType(type));
   const card = cardEls[id];
-  if (!card) return;
-  if (card.scrollIntoView) card.scrollIntoView({ block: 'center' });
+  if (!card) {
+    return;
+  }
+  if (card.scrollIntoView) {
+    card.scrollIntoView({ block: 'center' });
+  }
   card.classList.add('flash');
-  setTimeout(() => card.classList.remove('flash'), 1200);
+  setTimeout(function () {
+    card.classList.remove('flash');
+  }, 1200);
 }
 
 function renderNotes() {
   const list = document.getElementById('notes-list');
   list.innerHTML = '';
-  vault.notes.forEach((note) => {
+  vault.notes.forEach(function (note) {
     const div = cardShell(note);
     div.appendChild(textLine('strong', note.title));
     div.appendChild(textLine('p', note.content));
+
     const linkedEvent = findIn('events', note.linkedEventId);
     const linkedDeck = findIn('decks', note.linkedDeckId);
-    if (linkedEvent) div.appendChild(linkRow('Linked event: ', linkedEvent, 'events'));
-    if (linkedDeck) div.appendChild(linkRow('Linked deck: ', linkedDeck, 'decks'));
+    if (linkedEvent) {
+      div.appendChild(linkRow('Linked event: ', linkedEvent, 'events'));
+    }
+    if (linkedDeck) {
+      div.appendChild(linkRow('Linked deck: ', linkedDeck, 'decks'));
+    }
+
     addCardActions(div, [
-      iconButton('edit', 'Edit', () => editNote(note)),
-      iconButton('delete', 'Delete', () => confirmAndDelete('notes', note, note.title)),
+      iconButton('edit', 'Edit', function () {
+        editNote(note);
+      }),
+      iconButton('delete', 'Delete', function () {
+        confirmAndDelete('notes', note, note.title);
+      }),
     ]);
     list.appendChild(div);
   });
 }
 
+function byDate(a, b) {
+  if (a.date < b.date) {
+    return -1;
+  }
+  if (a.date > b.date) {
+    return 1;
+  }
+  return 0;
+}
+
 function renderCalendar() {
   const grid = document.getElementById('calendar-grid');
   grid.innerHTML = '';
-  const inDateOrder = vault.events.slice().sort((a, b) => a.date.localeCompare(b.date));
-  inDateOrder.forEach((ev) => {
-    const div = cardShell(ev);
-    div.appendChild(textLine('strong', ev.title));
-    div.appendChild(textLine('p', ev.date));
-    const linkedNote = findIn('notes', ev.linkedNoteId);
-    const linkedDeck = findIn('decks', ev.linkedDeckId);
-    if (linkedNote) div.appendChild(linkRow('Linked note: ', linkedNote, 'notes'));
-    if (linkedDeck) div.appendChild(linkRow('Linked deck: ', linkedDeck, 'decks'));
+
+  const inDateOrder = [];
+  vault.events.forEach(function (event) {
+    inDateOrder.push(event);
+  });
+  inDateOrder.sort(byDate);
+
+  inDateOrder.forEach(function (event) {
+    const div = cardShell(event);
+    div.appendChild(textLine('strong', event.title));
+    div.appendChild(textLine('p', event.date));
+
+    const linkedNote = findIn('notes', event.linkedNoteId);
+    const linkedDeck = findIn('decks', event.linkedDeckId);
+    if (linkedNote) {
+      div.appendChild(linkRow('Linked note: ', linkedNote, 'notes'));
+    }
+    if (linkedDeck) {
+      div.appendChild(linkRow('Linked deck: ', linkedDeck, 'decks'));
+    }
+
     addCardActions(div, [
-      iconButton('edit', 'Edit', () => editEvent(ev)),
-      iconButton('delete', 'Delete', () => confirmAndDelete('events', ev, ev.title)),
+      iconButton('edit', 'Edit', function () {
+        editEvent(event);
+      }),
+      iconButton('delete', 'Delete', function () {
+        confirmAndDelete('events', event, event.title);
+      }),
     ]);
     grid.appendChild(div);
   });
@@ -447,26 +703,47 @@ function renderCalendar() {
 function renderFlashcards() {
   const list = document.getElementById('flashcards-list');
   list.innerHTML = '';
+
   if (reviewState) {
     renderReview(list);
     return;
   }
-  vault.decks.forEach((deck) => {
+
+  vault.decks.forEach(function (deck) {
     const div = cardShell(deck);
     div.appendChild(textLine('strong', deck.name));
     div.appendChild(textLine('p', deck.cards.length + ' card(s)'));
+
     const linkedEvent = findIn('events', deck.linkedEventId);
     const linkedNote = findIn('notes', deck.linkedNoteId);
-    if (linkedEvent) div.appendChild(linkRow('Linked event: ', linkedEvent, 'events'));
-    if (linkedNote) div.appendChild(linkRow('Linked note: ', linkedNote, 'notes'));
+    if (linkedEvent) {
+      div.appendChild(linkRow('Linked event: ', linkedEvent, 'events'));
+    }
+    if (linkedNote) {
+      div.appendChild(linkRow('Linked note: ', linkedNote, 'notes'));
+    }
+
     const actions = [];
-    if (deck.cards.length > 0) actions.push(iconButton('school', 'Study', () => startReview(deck)));
-    addCardActions(div, actions.concat([
-      iconButton('edit', 'Edit', () => editDeck(deck)),
-      iconButton('delete', 'Delete', () => confirmAndDelete('decks', deck, deck.name)),
-    ]));
+    if (deck.cards.length > 0) {
+      actions.push(iconButton('school', 'Study', function () {
+        startReview(deck);
+      }));
+    }
+    actions.push(iconButton('edit', 'Edit', function () {
+      editDeck(deck);
+    }));
+    actions.push(iconButton('delete', 'Delete', function () {
+      confirmAndDelete('decks', deck, deck.name);
+    }));
+    addCardActions(div, actions);
     list.appendChild(div);
   });
+}
+
+function renderAll() {
+  renderNotes();
+  renderCalendar();
+  renderFlashcards();
 }
 
 let reviewState = null;
@@ -494,8 +771,10 @@ function renderReview(list) {
   const panel = document.createElement('div');
   panel.className = 'card review';
   panel.appendChild(textLine('strong', deck.name));
-  panel.appendChild(textLine('p', 'Card ' + (reviewState.index + 1) + ' of ' + deck.cards.length, 'review-count'));
+  panel.appendChild(textLine('p',
+    'Card ' + (reviewState.index + 1) + ' of ' + deck.cards.length, 'review-count'));
   panel.appendChild(textLine('div', card.front, 'review-face'));
+
   if (reviewState.revealed) {
     panel.appendChild(textLine('div', card.back, 'review-face review-back'));
   }
@@ -503,22 +782,28 @@ function renderReview(list) {
   const controls = document.createElement('div');
   controls.className = 'review-controls';
   const isLast = reviewState.index === deck.cards.length - 1;
+
   if (!reviewState.revealed) {
-    controls.appendChild(textButton('Show answer', () => {
+    controls.appendChild(textButton('Show answer', function () {
       reviewState.revealed = true;
       renderFlashcards();
     }, 'primary'));
   } else {
-    controls.appendChild(textButton(isLast ? 'Finish' : 'Next card', () => {
+    let nextLabel = 'Next card';
+    if (isLast) {
+      nextLabel = 'Finish';
+    }
+    controls.appendChild(textButton(nextLabel, function () {
       if (isLast) {
         reviewState = null;
       } else {
-        reviewState.index += 1;
+        reviewState.index = reviewState.index + 1;
         reviewState.revealed = false;
       }
       renderFlashcards();
     }, 'primary'));
   }
+
   controls.appendChild(textButton('Done', endReview));
   panel.appendChild(controls);
   list.appendChild(panel);
@@ -526,13 +811,22 @@ function renderReview(list) {
 
 function isValidDate(text) {
   const value = String(text).trim();
-  if (value.length !== 10) return false;
+  if (value.length !== 10) {
+    return false;
+  }
+
   const parts = value.split('-');
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3) {
+    return false;
+  }
+
   const year = Number(parts[0]);
   const month = Number(parts[1]);
   const day = Number(parts[2]);
-  if (!year || !month || !day) return false;
+  if (!year || !month || !day) {
+    return false;
+  }
+
   const when = new Date(Date.UTC(year, month - 1, day));
   return when.getUTCFullYear() === year
     && when.getUTCMonth() === month - 1
@@ -540,66 +834,111 @@ function isValidDate(text) {
 }
 
 function noteForm(note) {
+  let boxTitle = 'New note';
+  let title = '';
+  let content = '';
+  let eventId = '';
+  let deckId = '';
+  if (note) {
+    boxTitle = 'Edit note';
+    title = note.title;
+    content = note.content;
+    if (note.linkedEventId) {
+      eventId = note.linkedEventId;
+    }
+    if (note.linkedDeckId) {
+      deckId = note.linkedDeckId;
+    }
+  }
   return openForm({
-    title: note ? 'Edit note' : 'New note',
+    title: boxTitle,
     fields: [
-      { name: 'title', label: 'Title', type: 'text', value: note ? note.title : '', required: true },
-      { name: 'content', label: 'Content', type: 'textarea', value: note ? note.content : '' },
+      { name: 'title', label: 'Title', type: 'text', value: title, required: true },
+      { name: 'content', label: 'Content', type: 'textarea', value: content },
       { name: 'event', label: 'Linked event', type: 'select',
-        value: note ? note.linkedEventId || '' : '', options: linkOptions('events') },
+        value: eventId, options: linkOptions('events') },
       { name: 'deck', label: 'Linked deck', type: 'select',
-        value: note ? note.linkedDeckId || '' : '', options: linkOptions('decks') },
+        value: deckId, options: linkOptions('decks') },
     ],
-    check: (v) => v.title.trim() !== '',
+    check: function (values) {
+      return values.title.trim() !== '';
+    },
   });
 }
 
-function eventForm(ev) {
+function eventForm(event) {
+  let boxTitle = 'New event';
+  let title = '';
+  let date = '';
+  let noteId = '';
+  let deckId = '';
+  if (event) {
+    boxTitle = 'Edit event';
+    title = event.title;
+    date = event.date;
+    if (event.linkedNoteId) {
+      noteId = event.linkedNoteId;
+    }
+    if (event.linkedDeckId) {
+      deckId = event.linkedDeckId;
+    }
+  }
   return openForm({
-    title: ev ? 'Edit event' : 'New event',
+    title: boxTitle,
     fields: [
-      { name: 'title', label: 'Title', type: 'text', value: ev ? ev.title : '', required: true },
-      { name: 'date', label: 'Date', type: 'date', value: ev ? ev.date : '', required: true },
+      { name: 'title', label: 'Title', type: 'text', value: title, required: true },
+      { name: 'date', label: 'Date', type: 'date', value: date, required: true },
       { name: 'note', label: 'Linked note', type: 'select',
-        value: ev ? ev.linkedNoteId || '' : '', options: linkOptions('notes') },
+        value: noteId, options: linkOptions('notes') },
       { name: 'deck', label: 'Linked deck', type: 'select',
-        value: ev ? ev.linkedDeckId || '' : '', options: linkOptions('decks') },
+        value: deckId, options: linkOptions('decks') },
     ],
-    check: (v) => v.title.trim() !== '' && isValidDate(v.date),
+    check: function (values) {
+      return values.title.trim() !== '' && isValidDate(values.date);
+    },
   });
 }
 
 function deckForm(deck) {
+  let boxTitle = 'New deck';
+  let name = '';
+  let cards = [{ front: '', back: '' }];
+  let noteId = '';
+  let eventId = '';
+  if (deck) {
+    boxTitle = 'Edit deck';
+    name = deck.name;
+    cards = deck.cards;
+    if (deck.linkedNoteId) {
+      noteId = deck.linkedNoteId;
+    }
+    if (deck.linkedEventId) {
+      eventId = deck.linkedEventId;
+    }
+  }
   return openForm({
-    title: deck ? 'Edit deck' : 'New deck',
+    title: boxTitle,
     fields: [
-      { name: 'name', label: 'Deck name', type: 'text', value: deck ? deck.name : '', required: true },
-      { name: 'cards', label: 'Cards', type: 'cards',
-        value: deck ? deck.cards : [{ front: '', back: '' }] },
+      { name: 'name', label: 'Deck name', type: 'text', value: name, required: true },
+      { name: 'cards', label: 'Cards', type: 'cards', value: cards },
       { name: 'note', label: 'Linked note', type: 'select',
-        value: deck ? deck.linkedNoteId || '' : '', options: linkOptions('notes') },
+        value: noteId, options: linkOptions('notes') },
       { name: 'event', label: 'Linked event', type: 'select',
-        value: deck ? deck.linkedEventId || '' : '', options: linkOptions('events') },
+        value: eventId, options: linkOptions('events') },
     ],
-    check: (v) => v.name.trim() !== '',
-  });
-}
-
-function deleteItem(collection, id) {
-  vault[collection] = vault[collection].filter((item) => item.id !== id);
-
-  Object.values(vault).forEach((list) => {
-    list.forEach((item) => {
-      Object.keys(item).forEach((key) => {
-        if (key.endsWith('Id') && item[key] === id) item[key] = null;
-      });
-    });
+    check: function (values) {
+      return values.name.trim() !== '';
+    },
   });
 }
 
 async function confirmAndDelete(collection, item, label) {
-  if (!confirm(`Delete "${label}"?`)) return;
-  if (reviewState && reviewState.deckId === item.id) reviewState = null;
+  if (!confirm('Delete "' + label + '"?')) {
+    return;
+  }
+  if (reviewState && reviewState.deckId === item.id) {
+    reviewState = null;
+  }
   deleteItem(collection, item.id);
   await saveVault();
   renderAll();
@@ -607,70 +946,99 @@ async function confirmAndDelete(collection, item, label) {
 
 async function editNote(note) {
   const values = await noteForm(note);
-  if (!values) return;
+  if (!values) {
+    return;
+  }
   note.title = values.title.trim();
   note.content = values.content;
-  setLink(note, 'notes', 'events', values.event || null);
-  setLink(note, 'notes', 'decks', values.deck || null);
+  setLink(note, 'notes', 'events', values.event);
+  setLink(note, 'notes', 'decks', values.deck);
   await saveVault();
   renderAll();
 }
 
-async function editEvent(ev) {
-  const values = await eventForm(ev);
-  if (!values) return;
-  ev.title = values.title.trim();
-  ev.date = values.date;
-  setLink(ev, 'events', 'notes', values.note || null);
-  setLink(ev, 'events', 'decks', values.deck || null);
+async function editEvent(event) {
+  const values = await eventForm(event);
+  if (!values) {
+    return;
+  }
+  event.title = values.title.trim();
+  event.date = values.date;
+  setLink(event, 'events', 'notes', values.note);
+  setLink(event, 'events', 'decks', values.deck);
   await saveVault();
   renderAll();
 }
 
 async function editDeck(deck) {
   const values = await deckForm(deck);
-  if (!values) return;
+  if (!values) {
+    return;
+  }
   deck.name = values.name.trim();
   deck.cards = values.cards;
-  setLink(deck, 'decks', 'notes', values.note || null);
-  setLink(deck, 'decks', 'events', values.event || null);
-  if (reviewState && reviewState.deckId === deck.id) reviewState = null;
+  setLink(deck, 'decks', 'notes', values.note);
+  setLink(deck, 'decks', 'events', values.event);
+  if (reviewState && reviewState.deckId === deck.id) {
+    reviewState = null;
+  }
   await saveVault();
   renderAll();
 }
 
-document.getElementById('add-note-btn').addEventListener('click', async () => {
+document.getElementById('add-note-btn').addEventListener('click', async function () {
   const values = await noteForm(null);
-  if (!values) return;
-  const note = { id: uid(), title: values.title.trim(), content: values.content,
-                 linkedEventId: null, linkedDeckId: null };
+  if (!values) {
+    return;
+  }
+  const note = {
+    id: uid(),
+    title: values.title.trim(),
+    content: values.content,
+    linkedEventId: null,
+    linkedDeckId: null,
+  };
   vault.notes.push(note);
-  setLink(note, 'notes', 'events', values.event || null);
-  setLink(note, 'notes', 'decks', values.deck || null);
+  setLink(note, 'notes', 'events', values.event);
+  setLink(note, 'notes', 'decks', values.deck);
   await saveVault();
   renderAll();
 });
 
-document.getElementById('add-event-btn').addEventListener('click', async () => {
+document.getElementById('add-event-btn').addEventListener('click', async function () {
   const values = await eventForm(null);
-  if (!values) return;
-  const ev = { id: uid(), title: values.title.trim(), date: values.date,
-               linkedNoteId: null, linkedDeckId: null };
-  vault.events.push(ev);
-  setLink(ev, 'events', 'notes', values.note || null);
-  setLink(ev, 'events', 'decks', values.deck || null);
+  if (!values) {
+    return;
+  }
+  const event = {
+    id: uid(),
+    title: values.title.trim(),
+    date: values.date,
+    linkedNoteId: null,
+    linkedDeckId: null,
+  };
+  vault.events.push(event);
+  setLink(event, 'events', 'notes', values.note);
+  setLink(event, 'events', 'decks', values.deck);
   await saveVault();
   renderAll();
 });
 
-document.getElementById('add-deck-btn').addEventListener('click', async () => {
+document.getElementById('add-deck-btn').addEventListener('click', async function () {
   const values = await deckForm(null);
-  if (!values) return;
-  const deck = { id: uid(), name: values.name.trim(), cards: values.cards,
-                 linkedNoteId: null, linkedEventId: null };
+  if (!values) {
+    return;
+  }
+  const deck = {
+    id: uid(),
+    name: values.name.trim(),
+    cards: values.cards,
+    linkedNoteId: null,
+    linkedEventId: null,
+  };
   vault.decks.push(deck);
-  setLink(deck, 'decks', 'notes', values.note || null);
-  setLink(deck, 'decks', 'events', values.event || null);
+  setLink(deck, 'decks', 'notes', values.note);
+  setLink(deck, 'decks', 'events', values.event);
   await saveVault();
   renderAll();
 });
