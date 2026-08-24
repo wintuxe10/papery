@@ -1,4 +1,4 @@
-const CACHE_NAME = 'papery-v5';
+const CACHE_NAME = 'papery-v6';
 
 const FILES_TO_CACHE = [
   './',
