@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Papery</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <header>
+    <h1>Study PWA</h1>
+
+    <nav>
+      <button id="nav-notes" class="nav-btn active">Notes</button>
+      <button id="nav-calendar" class="nav-btn">Calendar</button>
+      <button id="nav-flashcards" class="nav-btn">Flashcards</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="notes-section" class="feature-section">
+      <h2>Notes</h2>
+      <div id="notes-list"></div>
+      <button id="add-note-btn">+ New Note</button>
+    </section>
+
+    <section id="calendar-section" class="feature-section hidden">
+      <h2>Calendar</h2>
+      <div id="calendar-grid"></div>
+      <button id="add-event-btn">+ New Event</button>
+    </section>
+
+    <section id="flashcards-section" class="feature-section hidden">
+      <h2>Flashcards</h2>
+      <div id="flashcards-list"></div>
+      <button id="add-deck-btn">+ New Deck</button>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
