@@ -35,8 +35,6 @@ function labelOf(item) {
   return item.title !== undefined ? item.title : item.name;
 }
 
-const MIN_PASSWORD = 8;
-
 async function deriveKey(password, salt) {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
@@ -92,23 +90,21 @@ async function unlockOrCreateVault() {
   const hasVault = localStorage.getItem('vault_data') !== null;
 
   if (!hasVault) {
-    const pw = await askNewPassword();
-    if (pw === null) throw new Error('setup cancelled');
+    let pw = null;
+    while (pw === null) pw = await askNewPassword();
     currentPassword = pw;
     await saveVault();
     return;
   }
 
-  let problem = '';
   while (true) {
-    const pw = await askPassword(problem);
-    if (pw === null) throw new Error('unlock cancelled');
+    const pw = await askPassword();
+    if (pw === null) continue;
     try {
       await decryptVault(pw);
       currentPassword = pw;
       return;
     } catch (e) {
-      problem = 'Wrong password. Try again.';
     }
   }
 }
@@ -143,7 +139,6 @@ const dialog = {
   form: document.getElementById('dialog'),
   title: document.getElementById('dialog-title'),
   fields: document.getElementById('dialog-fields'),
-  error: document.getElementById('dialog-error'),
   submit: document.getElementById('dialog-submit'),
   cancel: document.getElementById('dialog-cancel'),
 };
@@ -188,7 +183,7 @@ function makeField(spec) {
 
   if (spec.type !== 'select') applyTypingRules(input);
   if (spec.autocomplete) input.setAttribute('autocomplete', spec.autocomplete);
-  if (spec.minlength) input.setAttribute('minlength', String(spec.minlength));
+  if (spec.required) input.setAttribute('required', '');
   if (spec.placeholder) input.setAttribute('placeholder', spec.placeholder);
   if (spec.type === 'password') input.setAttribute('enterkeyhint', 'go');
 
@@ -238,7 +233,7 @@ function makeCardsField(spec) {
       applyTypingRules(back);
       row.appendChild(front);
       row.appendChild(back);
-      row.appendChild(textButton('Remove', () => {
+      row.appendChild(iconButton('close', 'Remove', () => {
         data = readRows();
         data.splice(i, 1);
         draw();
@@ -249,7 +244,7 @@ function makeCardsField(spec) {
   }
 
   draw();
-  wrap.appendChild(textButton('Add a card', () => {
+  wrap.appendChild(iconButton('add', 'Add a card', () => {
     data = readRows();
     data.push({ front: '', back: '' });
     draw();
@@ -265,7 +260,6 @@ function openForm(config) {
   return new Promise((resolve) => {
     dialog.title.textContent = config.title;
     dialog.submit.textContent = config.submitLabel || 'Save';
-    showError(config.error || '');
 
     dialog.fields.innerHTML = '';
     const readers = {};
@@ -289,23 +283,13 @@ function openForm(config) {
       if (event && event.preventDefault) event.preventDefault();
       const values = {};
       Object.keys(readers).forEach((name) => { values[name] = readers[name](); });
-      const problem = config.validate ? config.validate(values) : null;
-      if (problem) {
-        showError(problem);
-        return;
-      }
+      if (config.check && !config.check(values)) return;
       finish(values);
     };
 
     dialog.backdrop.classList.add('open');
     if (firstInput && firstInput.focus) firstInput.focus();
   });
-}
-
-function showError(message) {
-  dialog.error.textContent = message;
-  if (message) dialog.error.classList.remove('hidden');
-  else dialog.error.classList.add('hidden');
 }
 
 dialog.cancel.addEventListener('click', () => {
@@ -318,12 +302,12 @@ if (document.addEventListener) {
   });
 }
 
-function askPassword(problem) {
+function askPassword() {
   return openForm({
     title: 'Unlock your vault',
     submitLabel: 'Unlock',
-    error: problem,
-    fields: [{ name: 'pw', label: 'Password', type: 'password', autocomplete: 'current-password' }],
+    fields: [{ name: 'pw', label: 'Password', type: 'password',
+               autocomplete: 'current-password', required: true }],
   }).then((v) => (v ? v.pw : null));
 }
 
@@ -331,15 +315,8 @@ function askNewPassword() {
   return openForm({
     title: 'Create your vault password',
     submitLabel: 'Create vault',
-    fields: [
-      { name: 'pw', label: 'Password', type: 'password', autocomplete: 'new-password', minlength: MIN_PASSWORD },
-      { name: 'again', label: 'Type it again', type: 'password', autocomplete: 'new-password' },
-    ],
-    validate: (v) => {
-      if (v.pw.length < MIN_PASSWORD) return 'Use at least ' + MIN_PASSWORD + ' characters.';
-      if (v.pw !== v.again) return 'Those two passwords did not match.';
-      return null;
-    },
+    fields: [{ name: 'pw', label: 'Password', type: 'password',
+               autocomplete: 'new-password', required: true }],
   }).then((v) => (v ? v.pw : null));
 }
 
@@ -363,15 +340,18 @@ const ICONS = {
   edit: 'M180-180h44l472-471-44-44-472 471v44Zm-60 60v-128l575-574q8-8 19-12.5t23-4.5q11 0 22 4.5t20 12.5l44 44q9 9 13 20t4 22q0 11-4.5 22.5T823-694L248-120H120Zm659-617-41-41 41 41Zm-105 64-22-22 44 44-22-22Z',
   delete: 'M261-120q-24.75 0-42.37-17.63Q201-155.25 201-180v-570h-41v-60h188v-30h264v30h188v60h-41v570q0 24-18 42t-42 18H261Zm438-630H261v570h438v-570ZM367-266h60v-399h-60v399Zm166 0h60v-399h-60v399ZM261-750v570-570Z',
   school: 'M479-120 189-279v-240L40-600l439-240 441 240v317h-60v-282l-91 46v240L479-120Zm0-308 315-172-315-169-313 169 313 172Zm0 240 230-127v-168L479-360 249-485v170l230 127Zm1-240Zm-1 74Zm0 0Z',
+  add: 'M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z',
+  close: 'm256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z',
 };
 
-function iconButton(iconName, label, onClick) {
+function iconButton(iconName, label, onClick, className) {
   const btn = document.createElement('button');
   btn.innerHTML =
     '<svg class="icon" viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true" focusable="false">' +
     '<path d="' + ICONS[iconName] + '"/></svg>';
   btn.title = label;
   btn.setAttribute('aria-label', label);
+  if (className) btn.className = className;
   btn.addEventListener('click', onClick);
   return btn;
 }
@@ -479,11 +459,12 @@ function renderFlashcards() {
     const linkedNote = findIn('notes', deck.linkedNoteId);
     if (linkedEvent) div.appendChild(linkRow('Linked event: ', linkedEvent, 'events'));
     if (linkedNote) div.appendChild(linkRow('Linked note: ', linkedNote, 'notes'));
-    addCardActions(div, [
-      iconButton('school', 'Study', () => startReview(deck)),
+    const actions = [];
+    if (deck.cards.length > 0) actions.push(iconButton('school', 'Study', () => startReview(deck)));
+    addCardActions(div, actions.concat([
       iconButton('edit', 'Edit', () => editDeck(deck)),
       iconButton('delete', 'Delete', () => confirmAndDelete('decks', deck, deck.name)),
-    ]);
+    ]));
     list.appendChild(div);
   });
 }
@@ -491,10 +472,6 @@ function renderFlashcards() {
 let reviewState = null;
 
 function startReview(deck) {
-  if (deck.cards.length === 0) {
-    alert('This deck has no cards yet. Use Edit to add some.');
-    return;
-  }
   reviewState = { deckId: deck.id, index: 0, revealed: false };
   showSection('flashcards');
   renderFlashcards();
@@ -566,14 +543,14 @@ function noteForm(note) {
   return openForm({
     title: note ? 'Edit note' : 'New note',
     fields: [
-      { name: 'title', label: 'Title', type: 'text', value: note ? note.title : '' },
+      { name: 'title', label: 'Title', type: 'text', value: note ? note.title : '', required: true },
       { name: 'content', label: 'Content', type: 'textarea', value: note ? note.content : '' },
       { name: 'event', label: 'Linked event', type: 'select',
         value: note ? note.linkedEventId || '' : '', options: linkOptions('events') },
       { name: 'deck', label: 'Linked deck', type: 'select',
         value: note ? note.linkedDeckId || '' : '', options: linkOptions('decks') },
     ],
-    validate: (v) => (v.title.trim() ? null : 'Please give this note a title.'),
+    check: (v) => v.title.trim() !== '',
   });
 }
 
@@ -581,18 +558,14 @@ function eventForm(ev) {
   return openForm({
     title: ev ? 'Edit event' : 'New event',
     fields: [
-      { name: 'title', label: 'Title', type: 'text', value: ev ? ev.title : '' },
-      { name: 'date', label: 'Date', type: 'date', value: ev ? ev.date : '' },
+      { name: 'title', label: 'Title', type: 'text', value: ev ? ev.title : '', required: true },
+      { name: 'date', label: 'Date', type: 'date', value: ev ? ev.date : '', required: true },
       { name: 'note', label: 'Linked note', type: 'select',
         value: ev ? ev.linkedNoteId || '' : '', options: linkOptions('notes') },
       { name: 'deck', label: 'Linked deck', type: 'select',
         value: ev ? ev.linkedDeckId || '' : '', options: linkOptions('decks') },
     ],
-    validate: (v) => {
-      if (!v.title.trim()) return 'Please give this event a title.';
-      if (!isValidDate(v.date)) return 'Please choose a date.';
-      return null;
-    },
+    check: (v) => v.title.trim() !== '' && isValidDate(v.date),
   });
 }
 
@@ -600,7 +573,7 @@ function deckForm(deck) {
   return openForm({
     title: deck ? 'Edit deck' : 'New deck',
     fields: [
-      { name: 'name', label: 'Deck name', type: 'text', value: deck ? deck.name : '' },
+      { name: 'name', label: 'Deck name', type: 'text', value: deck ? deck.name : '', required: true },
       { name: 'cards', label: 'Cards', type: 'cards',
         value: deck ? deck.cards : [{ front: '', back: '' }] },
       { name: 'note', label: 'Linked note', type: 'select',
@@ -608,7 +581,7 @@ function deckForm(deck) {
       { name: 'event', label: 'Linked event', type: 'select',
         value: deck ? deck.linkedEventId || '' : '', options: linkOptions('events') },
     ],
-    validate: (v) => (v.name.trim() ? null : 'Please give this deck a name.'),
+    check: (v) => v.name.trim() !== '',
   });
 }
 
@@ -625,7 +598,7 @@ function deleteItem(collection, id) {
 }
 
 async function confirmAndDelete(collection, item, label) {
-  if (!confirm(`Delete "${label}"? This cannot be undone.`)) return;
+  if (!confirm(`Delete "${label}"?`)) return;
   if (reviewState && reviewState.deckId === item.id) reviewState = null;
   deleteItem(collection, item.id);
   await saveVault();
@@ -706,6 +679,4 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js');
 }
 
-unlockOrCreateVault().then(renderAll).catch(() => {
-  alert('The vault stays locked. Reload the page to try again.');
-});
+unlockOrCreateVault().then(renderAll);

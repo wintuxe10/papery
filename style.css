@@ -204,9 +204,7 @@ button {
   margin-bottom: 6px;
 }
 
-.reveal,
-.add-card,
-.remove-card {
+.reveal {
   width: auto;
   margin-top: 6px;
   padding: 4px 8px;
@@ -217,15 +215,15 @@ button {
   text-decoration: underline;
 }
 
+.add-card,
 .remove-card {
-  margin-top: 0;
-  flex-shrink: 0;
+  width: auto;
+  padding: 6px;
+  background: none;
 }
 
-#dialog-error {
-  font-size: 13px;
-  margin-top: 4px;
-  color: #367dbe;
+.remove-card {
+  flex-shrink: 0;
 }
 
 .dialog-actions {
