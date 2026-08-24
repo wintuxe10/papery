@@ -5,14 +5,18 @@ const sections = {
   flashcards: document.getElementById('flashcards-section'),
 };
 
+function showSection(key) {
+  navButtons.forEach((b) => b.classList.remove('active'));
+  const btn = document.getElementById('nav-' + key);
+  if (btn) btn.classList.add('active');
+
+  Object.values(sections).forEach((sec) => sec.classList.add('hidden'));
+  sections[key].classList.remove('hidden');
+}
+
 navButtons.forEach((btn) => {
   btn.addEventListener('click', () => {
-    navButtons.forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-
-    Object.values(sections).forEach((sec) => sec.classList.add('hidden'));
-    const key = btn.id.replace('nav-', '');
-    sections[key].classList.remove('hidden');
+    showSection(btn.id.replace('nav-', ''));
   });
 });
 
@@ -21,6 +25,17 @@ let vault = { notes: [], events: [], decks: [] };
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
+
+function findIn(collection, id) {
+  if (!id) return null;
+  return vault[collection].find((item) => item.id === id) || null;
+}
+
+function labelOf(item) {
+  return item.title !== undefined ? item.title : item.name;
+}
+
+const MIN_PASSWORD = 8;
 
 async function deriveKey(password, salt) {
   const enc = new TextEncoder();
@@ -31,7 +46,7 @@ async function deriveKey(password, salt) {
     {
       name: 'PBKDF2',
       salt,
-      iterations: 250000,
+      iterations: 600000,
       hash: 'SHA-256',
     },
     keyMaterial,
@@ -77,6 +92,10 @@ async function unlockOrCreateVault() {
   const hasVault = localStorage.getItem('vault_data') !== null;
   if (hasVault) {
     const pw = prompt('Enter your password to unlock:');
+    if (pw === null) {
+      alert('Cancelled. Reload the page when you are ready to unlock.');
+      throw new Error('unlock cancelled');
+    }
     try {
       await decryptVault(pw);
       currentPassword = pw;
@@ -85,11 +104,60 @@ async function unlockOrCreateVault() {
       throw e;
     }
   } else {
-    const pw = prompt('First time setup — create a password for your vault:');
-    currentPassword = pw;
-    await saveVault();
+    while (true) {
+      const pw = prompt('First time setup — create a password for your vault (at least ' + MIN_PASSWORD + ' characters):');
+      if (pw === null) {
+        alert('Setup cancelled. No vault was created. Reload the page to start again.');
+        throw new Error('setup cancelled');
+      }
+      if (pw.length < MIN_PASSWORD) {
+        alert('That password is too short. Use at least ' + MIN_PASSWORD + ' characters.');
+        continue;
+      }
+      const again = prompt('Type the same password again to confirm:');
+      if (again === null) {
+        alert('Setup cancelled. No vault was created. Reload the page to start again.');
+        throw new Error('setup cancelled');
+      }
+      if (again !== pw) {
+        alert('Those two passwords did not match. Please try again.');
+        continue;
+      }
+      currentPassword = pw;
+      await saveVault();
+      break;
+    }
   }
 }
+
+const LINK_FIELD = {
+  notes: 'linkedNoteId',
+  events: 'linkedEventId',
+  decks: 'linkedDeckId',
+};
+
+function unlink(item, type, otherType) {
+  const field = LINK_FIELD[otherType];
+  const otherId = item[field];
+  if (!otherId) return;
+  item[field] = null;
+  const other = findIn(otherType, otherId);
+  if (other && other[LINK_FIELD[type]] === item.id) other[LINK_FIELD[type]] = null;
+}
+
+function setLink(item, type, otherType, otherId) {
+  unlink(item, type, otherType);
+  if (!otherId) return;
+  const other = findIn(otherType, otherId);
+  if (!other) return;
+  unlink(other, otherType, type);
+  item[LINK_FIELD[otherType]] = other.id;
+  other[LINK_FIELD[type]] = item.id;
+}
+
+const SECTION_OF = { notes: 'notes', events: 'calendar', decks: 'flashcards' };
+
+const cardEls = {};
 
 function renderAll() {
   renderNotes();
@@ -100,6 +168,7 @@ function renderAll() {
 const ICONS = {
   edit: 'M180-180h44l472-471-44-44-472 471v44Zm-60 60v-128l575-574q8-8 19-12.5t23-4.5q11 0 22 4.5t20 12.5l44 44q9 9 13 20t4 22q0 11-4.5 22.5T823-694L248-120H120Zm659-617-41-41 41 41Zm-105 64-22-22 44 44-22-22Z',
   delete: 'M261-120q-24.75 0-42.37-17.63Q201-155.25 201-180v-570h-41v-60h188v-30h264v30h188v60h-41v570q0 24-18 42t-42 18H261Zm438-630H261v570h438v-570ZM367-266h60v-399h-60v399Zm166 0h60v-399h-60v399ZM261-750v570-570Z',
+  school: 'M479-120 189-279v-240L40-600l439-240 441 240v317h-60v-282l-91 46v240L479-120Zm0-308 315-172-315-169-313 169 313 172Zm0 240 230-127v-168L479-360 249-485v170l230 127Zm1-240Zm-1 74Zm0 0Z',
 };
 
 function iconButton(iconName, label, onClick) {
@@ -113,36 +182,70 @@ function iconButton(iconName, label, onClick) {
   return btn;
 }
 
-function addCardActions(cardEl, onEdit, onDelete) {
+function textButton(label, onClick, className) {
+  const btn = document.createElement('button');
+  btn.textContent = label;
+  if (className) btn.className = className;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function textLine(tag, text, className) {
+  const el = document.createElement(tag);
+  el.textContent = text;
+  if (className) el.className = className;
+  return el;
+}
+
+function cardShell(item) {
+  const div = document.createElement('div');
+  div.className = 'card';
+  div.setAttribute('data-id', item.id);
+  cardEls[item.id] = div;
+  return div;
+}
+
+function addCardActions(cardEl, buttons) {
   const actions = document.createElement('div');
   actions.className = 'card-actions';
-
-  const editBtn = iconButton('edit', 'Edit', onEdit);
-  const deleteBtn = iconButton('delete', 'Delete', onDelete);
-
-  actions.append(editBtn, deleteBtn);
+  buttons.forEach((b) => actions.appendChild(b));
   cardEl.appendChild(actions);
+}
+
+function linkRow(prefix, target, targetType) {
+  const row = textButton(prefix + labelOf(target), () => goToItem(targetType, target.id), 'link-row');
+  row.type = 'button';
+  return row;
+}
+
+function goToItem(type, id) {
+  if (reviewState) {
+    reviewState = null;
+    renderFlashcards();
+  }
+  showSection(SECTION_OF[type]);
+  const card = cardEls[id];
+  if (!card) return;
+  if (card.scrollIntoView) card.scrollIntoView({ block: 'center' });
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 1200);
 }
 
 function renderNotes() {
   const list = document.getElementById('notes-list');
   list.innerHTML = '';
   vault.notes.forEach((note) => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    const linkedEvent = vault.events.find((e) => e.id === note.linkedEventId);
-    const linkedDeck = vault.decks.find((d) => d.id === note.linkedDeckId);
-    div.innerHTML = `
-      <strong>${note.title}</strong>
-      <p>${note.content}</p>
-      ${linkedEvent ? `<div>Linked event: ${linkedEvent.title}</div>` : ''}
-      ${linkedDeck ? `<div>Linked deck: ${linkedDeck.name}</div>` : ''}
-    `;
-    addCardActions(
-      div,
-      () => editNote(note),
-      () => confirmAndDelete('notes', note, note.title)
-    );
+    const div = cardShell(note);
+    div.appendChild(textLine('strong', note.title));
+    div.appendChild(textLine('p', note.content));
+    const linkedEvent = findIn('events', note.linkedEventId);
+    const linkedDeck = findIn('decks', note.linkedDeckId);
+    if (linkedEvent) div.appendChild(linkRow('Linked event: ', linkedEvent, 'events'));
+    if (linkedDeck) div.appendChild(linkRow('Linked deck: ', linkedDeck, 'decks'));
+    addCardActions(div, [
+      iconButton('edit', 'Edit', () => editNote(note)),
+      iconButton('delete', 'Delete', () => confirmAndDelete('notes', note, note.title)),
+    ]);
     list.appendChild(div);
   });
 }
@@ -150,22 +253,19 @@ function renderNotes() {
 function renderCalendar() {
   const grid = document.getElementById('calendar-grid');
   grid.innerHTML = '';
-  vault.events.forEach((ev) => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    const linkedNote = vault.notes.find((n) => n.id === ev.linkedNoteId);
-    const linkedDeck = vault.decks.find((d) => d.id === ev.linkedDeckId);
-    div.innerHTML = `
-      <strong>${ev.title}</strong>
-      <p>${ev.date}</p>
-      ${linkedNote ? `<div>Linked note: ${linkedNote.title}</div>` : ''}
-      ${linkedDeck ? `<div>Linked deck: ${linkedDeck.name}</div>` : ''}
-    `;
-    addCardActions(
-      div,
-      () => editEvent(ev),
-      () => confirmAndDelete('events', ev, ev.title)
-    );
+  const inDateOrder = vault.events.slice().sort((a, b) => a.date.localeCompare(b.date));
+  inDateOrder.forEach((ev) => {
+    const div = cardShell(ev);
+    div.appendChild(textLine('strong', ev.title));
+    div.appendChild(textLine('p', ev.date));
+    const linkedNote = findIn('notes', ev.linkedNoteId);
+    const linkedDeck = findIn('decks', ev.linkedDeckId);
+    if (linkedNote) div.appendChild(linkRow('Linked note: ', linkedNote, 'notes'));
+    if (linkedDeck) div.appendChild(linkRow('Linked deck: ', linkedDeck, 'decks'));
+    addCardActions(div, [
+      iconButton('edit', 'Edit', () => editEvent(ev)),
+      iconButton('delete', 'Delete', () => confirmAndDelete('events', ev, ev.title)),
+    ]);
     grid.appendChild(div);
   });
 }
@@ -173,24 +273,84 @@ function renderCalendar() {
 function renderFlashcards() {
   const list = document.getElementById('flashcards-list');
   list.innerHTML = '';
+  if (reviewState) {
+    renderReview(list);
+    return;
+  }
   vault.decks.forEach((deck) => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    const linkedEvent = vault.events.find((e) => e.id === deck.linkedEventId);
-    const linkedNote = vault.notes.find((n) => n.id === deck.linkedNoteId);
-    div.innerHTML = `
-      <strong>${deck.name}</strong>
-      <p>${deck.cards.length} card(s)</p>
-      ${linkedEvent ? `<div>Linked event: ${linkedEvent.title}</div>` : ''}
-      ${linkedNote ? `<div>Linked note: ${linkedNote.title}</div>` : ''}
-    `;
-    addCardActions(
-      div,
-      () => editDeck(deck),
-      () => confirmAndDelete('decks', deck, deck.name)
-    );
+    const div = cardShell(deck);
+    div.appendChild(textLine('strong', deck.name));
+    div.appendChild(textLine('p', deck.cards.length + ' card(s)'));
+    const linkedEvent = findIn('events', deck.linkedEventId);
+    const linkedNote = findIn('notes', deck.linkedNoteId);
+    if (linkedEvent) div.appendChild(linkRow('Linked event: ', linkedEvent, 'events'));
+    if (linkedNote) div.appendChild(linkRow('Linked note: ', linkedNote, 'notes'));
+    addCardActions(div, [
+      iconButton('school', 'Study', () => startReview(deck)),
+      iconButton('edit', 'Edit', () => editDeck(deck)),
+      iconButton('delete', 'Delete', () => confirmAndDelete('decks', deck, deck.name)),
+    ]);
     list.appendChild(div);
   });
+}
+
+let reviewState = null;
+
+function startReview(deck) {
+  if (deck.cards.length === 0) {
+    alert('This deck has no cards yet. Use Edit to add some.');
+    return;
+  }
+  reviewState = { deckId: deck.id, index: 0, revealed: false };
+  showSection('flashcards');
+  renderFlashcards();
+}
+
+function endReview() {
+  reviewState = null;
+  renderFlashcards();
+}
+
+function renderReview(list) {
+  const deck = findIn('decks', reviewState.deckId);
+  if (!deck || deck.cards.length === 0) {
+    reviewState = null;
+    renderFlashcards();
+    return;
+  }
+  const card = deck.cards[reviewState.index];
+
+  const panel = document.createElement('div');
+  panel.className = 'card review';
+  panel.appendChild(textLine('strong', deck.name));
+  panel.appendChild(textLine('p', 'Card ' + (reviewState.index + 1) + ' of ' + deck.cards.length, 'review-count'));
+  panel.appendChild(textLine('div', card.front, 'review-face'));
+  if (reviewState.revealed) {
+    panel.appendChild(textLine('div', card.back, 'review-face review-back'));
+  }
+
+  const controls = document.createElement('div');
+  controls.className = 'review-controls';
+  const isLast = reviewState.index === deck.cards.length - 1;
+  if (!reviewState.revealed) {
+    controls.appendChild(textButton('Show answer', () => {
+      reviewState.revealed = true;
+      renderFlashcards();
+    }));
+  } else {
+    controls.appendChild(textButton(isLast ? 'Finish' : 'Next card', () => {
+      if (isLast) {
+        reviewState = null;
+      } else {
+        reviewState.index += 1;
+        reviewState.revealed = false;
+      }
+      renderFlashcards();
+    }));
+  }
+  controls.appendChild(textButton('Done', endReview, 'secondary'));
+  panel.appendChild(controls);
+  list.appendChild(panel);
 }
 
 function pickFromList(items, labelFn, promptText) {
@@ -217,6 +377,32 @@ function pickLink(items, labelFn, promptText, currentId) {
   return items[index].id;
 }
 
+function isValidDate(text) {
+  const value = String(text).trim();
+  if (value.length !== 10) return false;
+  const parts = value.split('-');
+  if (parts.length !== 3) return false;
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (!year || !month || !day) return false;
+  const when = new Date(Date.UTC(year, month - 1, day));
+  return when.getUTCFullYear() === year
+    && when.getUTCMonth() === month - 1
+    && when.getUTCDate() === day;
+}
+
+function askDate(current) {
+  let suggestion = current === undefined ? '' : current;
+  while (true) {
+    const answer = prompt('Event date (YYYY-MM-DD, e.g. 2026-08-30):', suggestion);
+    if (answer === null) return null;
+    if (isValidDate(answer)) return answer.trim();
+    alert('"' + answer + '" is not a real date. Please write it as YYYY-MM-DD, e.g. 2026-08-30.');
+    suggestion = answer;
+  }
+}
+
 function deleteItem(collection, id) {
   vault[collection] = vault[collection].filter((item) => item.id !== id);
 
@@ -231,6 +417,7 @@ function deleteItem(collection, id) {
 
 async function confirmAndDelete(collection, item, label) {
   if (!confirm(`Delete "${label}"? This cannot be undone.`)) return;
+  if (reviewState && reviewState.deckId === item.id) reviewState = null;
   deleteItem(collection, item.id);
   await saveVault();
   renderAll();
@@ -244,8 +431,8 @@ async function editNote(note) {
 
   note.title = title.trim() || note.title;
   note.content = content;
-  note.linkedEventId = pickLink(vault.events, (e) => e.title, 'Link to an event?', note.linkedEventId);
-  note.linkedDeckId = pickLink(vault.decks, (d) => d.name, 'Link to a flashcard deck?', note.linkedDeckId);
+  setLink(note, 'notes', 'events', pickLink(vault.events, (e) => e.title, 'Link to an event?', note.linkedEventId));
+  setLink(note, 'notes', 'decks', pickLink(vault.decks, (d) => d.name, 'Link to a flashcard deck?', note.linkedDeckId));
   await saveVault();
   renderAll();
 }
@@ -253,13 +440,13 @@ async function editNote(note) {
 async function editEvent(ev) {
   const title = prompt('Event title:', ev.title);
   if (title === null) return;
-  const date = prompt('Event date (e.g. 2026-08-30):', ev.date);
+  const date = askDate(ev.date);
   if (date === null) return;
 
   ev.title = title.trim() || ev.title;
   ev.date = date;
-  ev.linkedNoteId = pickLink(vault.notes, (n) => n.title, 'Link to a note?', ev.linkedNoteId);
-  ev.linkedDeckId = pickLink(vault.decks, (d) => d.name, 'Link to a flashcard deck?', ev.linkedDeckId);
+  setLink(ev, 'events', 'notes', pickLink(vault.notes, (n) => n.title, 'Link to a note?', ev.linkedNoteId));
+  setLink(ev, 'events', 'decks', pickLink(vault.decks, (d) => d.name, 'Link to a flashcard deck?', ev.linkedDeckId));
   await saveVault();
   renderAll();
 }
@@ -269,8 +456,8 @@ async function editDeck(deck) {
   if (name === null) return;
 
   deck.name = name.trim() || deck.name;
-  deck.linkedNoteId = pickLink(vault.notes, (n) => n.title, 'Link to a note?', deck.linkedNoteId);
-  deck.linkedEventId = pickLink(vault.events, (e) => e.title, 'Link to an event?', deck.linkedEventId);
+  setLink(deck, 'decks', 'notes', pickLink(vault.notes, (n) => n.title, 'Link to a note?', deck.linkedNoteId));
+  setLink(deck, 'decks', 'events', pickLink(vault.events, (e) => e.title, 'Link to an event?', deck.linkedEventId));
 
   const replace = confirm(
     `Replace the ${deck.cards.length} card(s) in this deck?\n` +
@@ -285,6 +472,7 @@ async function editDeck(deck) {
       cards.push({ front, back });
     }
     deck.cards = cards;
+    if (reviewState && reviewState.deckId === deck.id) reviewState = null;
   }
   await saveVault();
   renderAll();
@@ -296,11 +484,10 @@ document.getElementById('add-note-btn').addEventListener('click', async () => {
   const content = prompt('Note content:') || '';
   const linkedEvent = pickFromList(vault.events, (e) => e.title, 'Link to an event?');
   const linkedDeck = pickFromList(vault.decks, (d) => d.name, 'Link to a flashcard deck?');
-  vault.notes.push({
-    id: uid(), title, content,
-    linkedEventId: linkedEvent ? linkedEvent.id : null,
-    linkedDeckId: linkedDeck ? linkedDeck.id : null,
-  });
+  const note = { id: uid(), title, content, linkedEventId: null, linkedDeckId: null };
+  vault.notes.push(note);
+  setLink(note, 'notes', 'events', linkedEvent ? linkedEvent.id : null);
+  setLink(note, 'notes', 'decks', linkedDeck ? linkedDeck.id : null);
   await saveVault();
   renderAll();
 });
@@ -308,14 +495,14 @@ document.getElementById('add-note-btn').addEventListener('click', async () => {
 document.getElementById('add-event-btn').addEventListener('click', async () => {
   const title = prompt('Event title:');
   if (!title) return;
-  const date = prompt('Event date (e.g. 2026-08-30):') || '';
+  const date = askDate();
+  if (date === null) return;
   const linkedNote = pickFromList(vault.notes, (n) => n.title, 'Link to a note?');
   const linkedDeck = pickFromList(vault.decks, (d) => d.name, 'Link to a flashcard deck?');
-  vault.events.push({
-    id: uid(), title, date,
-    linkedNoteId: linkedNote ? linkedNote.id : null,
-    linkedDeckId: linkedDeck ? linkedDeck.id : null,
-  });
+  const ev = { id: uid(), title, date, linkedNoteId: null, linkedDeckId: null };
+  vault.events.push(ev);
+  setLink(ev, 'events', 'notes', linkedNote ? linkedNote.id : null);
+  setLink(ev, 'events', 'decks', linkedDeck ? linkedDeck.id : null);
   await saveVault();
   renderAll();
 });
@@ -332,11 +519,10 @@ document.getElementById('add-deck-btn').addEventListener('click', async () => {
   }
   const linkedNote = pickFromList(vault.notes, (n) => n.title, 'Link to a note?');
   const linkedEvent = pickFromList(vault.events, (e) => e.title, 'Link to an event?');
-  vault.decks.push({
-    id: uid(), name, cards,
-    linkedNoteId: linkedNote ? linkedNote.id : null,
-    linkedEventId: linkedEvent ? linkedEvent.id : null,
-  });
+  const deck = { id: uid(), name, cards, linkedNoteId: null, linkedEventId: null };
+  vault.decks.push(deck);
+  setLink(deck, 'decks', 'notes', linkedNote ? linkedNote.id : null);
+  setLink(deck, 'decks', 'events', linkedEvent ? linkedEvent.id : null);
   await saveVault();
   renderAll();
 });
@@ -345,4 +531,4 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js');
 }
 
-unlockOrCreateVault().then(renderAll);
+unlockOrCreateVault().then(renderAll).catch(() => {});

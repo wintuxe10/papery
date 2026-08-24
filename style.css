@@ -118,3 +118,59 @@ button {
   font-size: 12px;
   cursor: pointer;
 }
+
+.link-row {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  color: #367dbe;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.card.flash {
+  outline: 2px solid #367dbe;
+}
+
+.review-count {
+  font-size: 12px;
+}
+
+.review-face {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  background: #3b3b3f;
+  font-size: 15px;
+}
+
+.review-back {
+  border-left: 3px solid #367dbe;
+}
+
+.review-controls {
+  display: flex;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.review-controls button {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: #367dbe;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.review-controls button.secondary {
+  background: #4d4d55;
+}
