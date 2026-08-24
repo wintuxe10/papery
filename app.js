@@ -336,7 +336,7 @@ function renderReview(list) {
     controls.appendChild(textButton('Show answer', () => {
       reviewState.revealed = true;
       renderFlashcards();
-    }));
+    }, 'primary'));
   } else {
     controls.appendChild(textButton(isLast ? 'Finish' : 'Next card', () => {
       if (isLast) {
@@ -346,9 +346,9 @@ function renderReview(list) {
         reviewState.revealed = false;
       }
       renderFlashcards();
-    }));
+    }, 'primary'));
   }
-  controls.appendChild(textButton('Done', endReview, 'secondary'));
+  controls.appendChild(textButton('Done', endReview));
   panel.appendChild(controls);
   list.appendChild(panel);
 }
