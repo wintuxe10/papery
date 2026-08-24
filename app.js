@@ -456,9 +456,7 @@ function openForm(config) {
     };
 
     dialog.form.onsubmit = function (event) {
-      if (event && event.preventDefault) {
-        event.preventDefault();
-      }
+      event.preventDefault();
 
       const values = {};
       readers.forEach(function (reader) {
@@ -472,7 +470,7 @@ function openForm(config) {
     };
 
     dialog.backdrop.classList.add('open');
-    if (firstInput && firstInput.focus) {
+    if (firstInput) {
       firstInput.focus();
     }
   });
@@ -599,11 +597,9 @@ function sectionForType(type) {
 }
 
 function linkRow(prefix, target, targetType) {
-  const row = textButton(prefix + labelOf(target), function () {
+  return textButton(prefix + labelOf(target), function () {
     goToItem(targetType, target.id);
   }, 'link-row');
-  row.type = 'button';
-  return row;
 }
 
 function goToItem(type, id) {
@@ -616,9 +612,7 @@ function goToItem(type, id) {
   if (!card) {
     return;
   }
-  if (card.scrollIntoView) {
-    card.scrollIntoView({ block: 'center' });
-  }
+  card.scrollIntoView({ block: 'center' });
   card.classList.add('flash');
   setTimeout(function () {
     card.classList.remove('flash');
