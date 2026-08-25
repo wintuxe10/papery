@@ -539,10 +539,9 @@ const cardEls = {};
 function iconButton(iconName, label, onClick, className) {
   const button = document.createElement('button');
   button.innerHTML =
-    '<svg class="icon" viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true" focusable="false">' +
+    '<svg class="icon" viewBox="0 -960 960 960" fill="currentColor">' +
     '<path d="' + ICONS[iconName] + '"/></svg>';
   button.title = label;
-  button.setAttribute('aria-label', label);
   if (className) {
     button.className = className;
   }
