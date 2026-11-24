@@ -1,4 +1,7 @@
 const navButtons = document.querySelectorAll('.nav-btn');
+const navBar = document.querySelector('nav');
+const pageHeader = document.querySelector('header');
+const pageMain = document.querySelector('main');
 
 const sections = [
   { key: 'notes', el: document.getElementById('notes-section') },
@@ -6,7 +9,69 @@ const sections = [
   { key: 'flashcards', el: document.getElementById('flashcards-section') },
 ];
 
+const calmMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+const EASE_OUT = 'cubic-bezier(0.2, 0, 0, 1)';
+const EASE_IN = 'cubic-bezier(0.4, 0, 1, 1)';
+const EASE_MOVE = 'cubic-bezier(0.4, 0, 0.2, 1)';
+
+function motionFrames(frames) {
+  if (!calmMotion.matches) {
+    return frames;
+  }
+  const fadesOnly = [];
+  frames.forEach(function (frame) {
+    if (frame.opacity !== undefined) {
+      fadesOnly.push({ opacity: frame.opacity });
+    }
+  });
+  if (fadesOnly.length === 0) {
+    return null;
+  }
+  return fadesOnly;
+}
+
+function play(element, frames, duration, easing) {
+  if (!element || !element.animate) {
+    return null;
+  }
+  const used = motionFrames(frames);
+  if (!used) {
+    return null;
+  }
+  return element.animate(used, { duration: duration, easing: easing });
+}
+
+function playOut(element, frames, duration, easing) {
+  if (!element || !element.animate) {
+    return null;
+  }
+  const used = motionFrames(frames);
+  if (!used) {
+    return null;
+  }
+  return element.animate(used, { duration: duration, easing: easing, fill: 'forwards' });
+}
+
+async function whenDone(animation) {
+  if (!animation) {
+    return;
+  }
+  try {
+    await animation.finished;
+  } catch (error) {
+  }
+}
+
+document.addEventListener('touchstart', function () {
+}, { passive: true });
+
+let currentSection = 'notes';
+
 function showSection(key) {
+  const changed = key !== currentSection;
+  currentSection = key;
+
   navButtons.forEach(function (button) {
     button.classList.remove('active');
   });
@@ -16,9 +81,16 @@ function showSection(key) {
     button.classList.add('active');
   }
 
-  sections.forEach(function (section) {
+  sections.forEach(function (section, index) {
     if (section.key === key) {
       section.el.classList.remove('hidden');
+      navBar.style.setProperty('--tab', index);
+      if (changed) {
+        play(section.el, [
+          { opacity: 0, transform: 'translateY(4px)' },
+          { opacity: 1, transform: 'none' },
+        ], 180, EASE_OUT);
+      }
     } else {
       section.el.classList.add('hidden');
     }
@@ -146,6 +218,11 @@ async function saveVault() {
   await encryptVault(currentPassword);
 }
 
+async function saveAndShow() {
+  renderAll();
+  await saveVault();
+}
+
 async function unlockOrCreateVault() {
   const hasVault = localStorage.getItem('vault_data') !== null;
 
@@ -159,18 +236,26 @@ async function unlockOrCreateVault() {
     return;
   }
 
-  while (true) {
-    const password = await askPassword();
-    if (password === null) {
-      continue;
-    }
-    try {
-      await decryptVault(password);
-      currentPassword = password;
-      return;
-    } catch (error) {
-    }
-  }
+  await openForm({
+    title: 'Unlock your vault',
+    submitLabel: 'Unlock',
+    busyLabel: 'Unlocking…',
+    errorText: 'Wrong password.',
+    lock: true,
+    fields: [
+      { name: 'pw', label: 'Password', type: 'password',
+        autocomplete: 'current-password', required: true },
+    ],
+    verify: async function (values) {
+      try {
+        await decryptVault(values.pw);
+        currentPassword = values.pw;
+        return true;
+      } catch (error) {
+        return false;
+      }
+    },
+  });
 }
 
 function getLink(item, otherType) {
@@ -259,6 +344,7 @@ const dialog = {
   form: document.getElementById('dialog'),
   title: document.getElementById('dialog-title'),
   fields: document.getElementById('dialog-fields'),
+  error: document.getElementById('dialog-error'),
   submit: document.getElementById('dialog-submit'),
   cancel: document.getElementById('dialog-cancel'),
 };
@@ -401,6 +487,10 @@ function makeCardsField(spec) {
     data = readRows();
     data.push({ front: '', back: '' });
     draw();
+    play(rows.lastChild, [
+      { opacity: 0, transform: 'translateY(-4px)' },
+      { opacity: 1, transform: 'none' },
+    ], 160, EASE_OUT);
   }, 'add-card'));
 
   return {
@@ -417,14 +507,109 @@ function makeCardsField(spec) {
   };
 }
 
+let dialogExits = [];
+let focusBack = null;
+let focusPending = false;
+
+function stopDialogExit() {
+  dialogExits.forEach(function (animation) {
+    if (animation) {
+      animation.cancel();
+    }
+  });
+  dialogExits = [];
+  dialog.backdrop.classList.remove('closing');
+}
+
+function showDialog(isLock) {
+  const wasOpen = dialog.backdrop.classList.contains('open');
+  stopDialogExit();
+  dialog.backdrop.classList.add('open');
+  pageHeader.inert = true;
+  pageMain.inert = true;
+  if (isLock || wasOpen) {
+    return;
+  }
+  play(dialog.backdrop, [{ opacity: 0 }, { opacity: 1 }], 200, EASE_OUT);
+  play(dialog.form, [
+    { opacity: 0, transform: 'translateY(8px) scale(0.985)' },
+    { opacity: 1, transform: 'none' },
+  ], 240, EASE_OUT);
+}
+
+async function hideDialog() {
+  pageHeader.inert = false;
+  pageMain.inert = false;
+
+  dialog.backdrop.classList.add('closing');
+  let exits;
+  if (dialog.backdrop.classList.contains('lock')) {
+    exits = [
+      playOut(dialog.backdrop, [{ opacity: 1 }, { opacity: 0 }], 200, EASE_OUT),
+    ];
+  } else {
+    exits = [
+      playOut(dialog.backdrop, [{ opacity: 1 }, { opacity: 0 }], 140, EASE_IN),
+      playOut(dialog.form, [
+        { opacity: 1, transform: 'none' },
+        { opacity: 0, transform: 'translateY(4px)' },
+      ], 140, EASE_IN),
+    ];
+  }
+  dialogExits = exits;
+  await whenDone(exits[0]);
+  if (dialogExits !== exits) {
+    return;
+  }
+  dialog.backdrop.classList.remove('open');
+  stopDialogExit();
+}
+
+function giveFocusBack() {
+  if (!focusPending || !focusBack) {
+    return;
+  }
+  if (focusBack.isConnected) {
+    focusBack.focus({ preventScroll: true });
+    return;
+  }
+  const oldCard = focusBack.closest('.card');
+  if (!oldCard) {
+    return;
+  }
+  const newCard = cardEls[oldCard.getAttribute('data-id')];
+  if (!newCard || !newCard.isConnected) {
+    return;
+  }
+  const buttons = newCard.querySelectorAll('button');
+  for (let i = 0; i < buttons.length; i++) {
+    if (buttons[i].title === focusBack.title) {
+      buttons[i].focus({ preventScroll: true });
+      return;
+    }
+  }
+}
+
 function openForm(config) {
   return new Promise(function (resolve) {
     dialog.title.textContent = config.title;
+    let submitLabel = 'Save';
     if (config.submitLabel) {
-      dialog.submit.textContent = config.submitLabel;
-    } else {
-      dialog.submit.textContent = 'Save';
+      submitLabel = config.submitLabel;
     }
+    dialog.submit.textContent = submitLabel;
+    dialog.submit.disabled = false;
+    if (config.danger) {
+      dialog.submit.className = 'danger';
+    } else {
+      dialog.submit.className = 'primary';
+    }
+    if (config.lock) {
+      dialog.backdrop.classList.add('lock');
+    } else {
+      dialog.backdrop.classList.remove('lock');
+    }
+    dialog.error.textContent = '';
 
     dialog.fields.innerHTML = '';
 
@@ -445,18 +630,28 @@ function openForm(config) {
     });
 
     function finish(result) {
-      dialog.backdrop.classList.remove('open');
       cancelDialog = null;
       dialog.form.onsubmit = null;
+      hideDialog();
+      focusPending = true;
+      giveFocusBack();
       resolve(result);
     }
 
-    cancelDialog = function () {
-      finish(null);
-    };
+    if (config.lock) {
+      cancelDialog = null;
+    } else {
+      cancelDialog = function () {
+        finish(null);
+      };
+    }
 
-    dialog.form.onsubmit = function (event) {
+    let busy = false;
+    dialog.form.onsubmit = async function (event) {
       event.preventDefault();
+      if (busy) {
+        return;
+      }
 
       const values = {};
       readers.forEach(function (reader) {
@@ -466,15 +661,52 @@ function openForm(config) {
       if (config.check && !config.check(values)) {
         return;
       }
+
+      if (config.verify) {
+        busy = true;
+        dialog.submit.disabled = true;
+        dialog.submit.textContent = config.busyLabel;
+        dialog.error.textContent = '';
+        const passed = await config.verify(values);
+        busy = false;
+        dialog.submit.disabled = false;
+        dialog.submit.textContent = submitLabel;
+        if (!passed) {
+          dialog.error.textContent = config.errorText;
+          play(dialog.form, [
+            { transform: 'translateX(0)' },
+            { transform: 'translateX(-4px)' },
+            { transform: 'translateX(4px)' },
+            { transform: 'translateX(-2px)' },
+            { transform: 'translateX(0)' },
+          ], 280, 'ease-in-out');
+          if (firstInput) {
+            firstInput.focus();
+            firstInput.select();
+          }
+          return;
+        }
+      }
       finish(values);
     };
 
-    dialog.backdrop.classList.add('open');
+    if (!config.lock) {
+      focusBack = document.activeElement;
+      focusPending = false;
+    }
+
+    showDialog(config.lock);
     if (firstInput) {
       firstInput.focus();
+    } else {
+      dialog.cancel.focus();
     }
   });
 }
+
+dialog.form.addEventListener('submit', function (event) {
+  event.preventDefault();
+});
 
 dialog.cancel.addEventListener('click', function () {
   if (cancelDialog) {
@@ -488,25 +720,11 @@ document.addEventListener('keydown', function (event) {
   }
 });
 
-async function askPassword() {
-  const values = await openForm({
-    title: 'Unlock your vault',
-    submitLabel: 'Unlock',
-    fields: [
-      { name: 'pw', label: 'Password', type: 'password',
-        autocomplete: 'current-password', required: true },
-    ],
-  });
-  if (!values) {
-    return null;
-  }
-  return values.pw;
-}
-
 async function askNewPassword() {
   const values = await openForm({
     title: 'Create your vault password',
     submitLabel: 'Create vault',
+    lock: true,
     fields: [
       { name: 'pw', label: 'Password', type: 'password',
         autocomplete: 'new-password', required: true },
@@ -532,15 +750,22 @@ const ICONS = {
   school: 'M479-120 189-279v-240L40-600l439-240 441 240v317h-60v-282l-91 46v240L479-120Zm0-308 315-172-315-169-313 169 313 172Zm0 240 230-127v-168L479-360 249-485v170l230 127Zm1-240Zm-1 74Zm0 0Z',
   add: 'M440-440H200v-80h240v-240h80v240h240v80H520v240h-80v-240Z',
   close: 'm256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z',
+  notes: 'M319-250h322v-60H319v60Zm0-170h322v-60H319v60ZM220-80q-24 0-42-18t-18-42v-680q0-24 18-42t42-18h361l219 219v521q0 24-18 42t-42 18H220Zm331-554v-186H220v680h520v-494H551ZM220-820v186-186 680-680Z',
+  events: 'M180-80q-24 0-42-18t-18-42v-620q0-24 18-42t42-18h65v-60h65v60h340v-60h65v60h65q24 0 42 18t18 42v620q0 24-18 42t-42 18H180Zm0-60h600v-430H180v430Zm0-490h600v-130H180v130Zm0 0v-130 130Zm300 230q-17 0-28.5-11.5T440-440q0-17 11.5-28.5T480-480q17 0 28.5 11.5T520-440q0 17-11.5 28.5T480-400Zm-188.5-11.5Q280-423 280-440t11.5-28.5Q303-480 320-480t28.5 11.5Q360-457 360-440t-11.5 28.5Q337-400 320-400t-28.5-11.5ZM640-400q-17 0-28.5-11.5T600-440q0-17 11.5-28.5T640-480q17 0 28.5 11.5T680-440q0 17-11.5 28.5T640-400ZM480-240q-17 0-28.5-11.5T440-280q0-17 11.5-28.5T480-320q17 0 28.5 11.5T520-280q0 17-11.5 28.5T480-240Zm-188.5-11.5Q280-263 280-280t11.5-28.5Q303-320 320-320t28.5 11.5Q360-297 360-280t-11.5 28.5Q337-240 320-240t-28.5-11.5ZM640-240q-17 0-28.5-11.5T600-280q0-17 11.5-28.5T640-320q17 0 28.5 11.5T680-280q0 17-11.5 28.5T640-240Z',
+  decks: 'm165-170-58-420q-3-24 12-43.5t39-22.5l68 478 477-57h65q0 23-14.5 39T716-177l-484 59q-24 3-43.55-12.07Q168.91-145.14 165-170Zm115-126q-24 0-42-18t-18-42v-424q0-24 18-42t42-18h540q24 0 42 18t18 42v424q0 24-18 42t-42 18H280Zm0-60h540v-424H280v424Zm0 0v-424 424Zm-54 178Zm164-430h320v-60H390v60Zm0 140h199v-60H390v60Z',
 };
 
 const cardEls = {};
 
+function iconMarkup(iconName) {
+  return '<svg class="icon" viewBox="0 -960 960 960" fill="currentColor">' +
+    '<path d="' + ICONS[iconName] + '"/></svg>';
+}
+
 function iconButton(iconName, label, onClick, className) {
   const button = document.createElement('button');
-  button.innerHTML =
-    '<svg class="icon" viewBox="0 -960 960 960" fill="currentColor">' +
-    '<path d="' + ICONS[iconName] + '"/></svg>';
+  button.type = 'button';
+  button.innerHTML = iconMarkup(iconName);
   button.title = label;
   if (className) {
     button.className = className;
@@ -596,10 +821,18 @@ function sectionForType(type) {
 }
 
 function linkRow(prefix, target, targetType) {
-  return textButton(prefix + labelOf(target), function () {
+  const button = document.createElement('button');
+  button.className = 'link-row';
+  button.innerHTML = iconMarkup(targetType);
+  button.appendChild(textLine('span', prefix, 'link-prefix'));
+  button.appendChild(textLine('span', labelOf(target), 'link-target'));
+  button.addEventListener('click', function () {
     goToItem(targetType, target.id);
-  }, 'link-row');
+  });
+  return button;
 }
+
+let flashTimer = null;
 
 function goToItem(type, id) {
   if (reviewState) {
@@ -611,9 +844,16 @@ function goToItem(type, id) {
   if (!card) {
     return;
   }
-  card.scrollIntoView({ block: 'center' });
+  let scrolling = 'auto';
+  if (!calmMotion.matches) {
+    scrolling = 'smooth';
+  }
+  card.scrollIntoView({ block: 'center', behavior: scrolling });
+  card.classList.remove('flash');
+  card.getBoundingClientRect();
   card.classList.add('flash');
-  setTimeout(function () {
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(function () {
     card.classList.remove('flash');
   }, 1200);
 }
@@ -624,7 +864,9 @@ function renderNotes() {
   vault.notes.forEach(function (note) {
     const div = cardShell(note);
     div.appendChild(textLine('strong', note.title));
-    div.appendChild(textLine('p', note.content));
+    if (note.content !== '') {
+      div.appendChild(textLine('p', note.content, 'note-text'));
+    }
 
     const linkedEvent = findIn('events', note.linkedEventId);
     const linkedDeck = findIn('decks', note.linkedDeckId);
@@ -657,6 +899,28 @@ function byDate(a, b) {
   return 0;
 }
 
+function dateParts(text) {
+  const parts = String(text).split('-');
+  const when = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  let weekday = when.toLocaleDateString('en-US', { weekday: 'long' });
+  if (when.getFullYear() !== new Date().getFullYear()) {
+    weekday = weekday + ' · ' + when.getFullYear();
+  }
+  return {
+    day: String(when.getDate()),
+    month: when.toLocaleDateString('en-US', { month: 'short' }),
+    weekday: weekday,
+  };
+}
+
+function dateBlock(parts) {
+  const block = document.createElement('div');
+  block.className = 'date-block';
+  block.appendChild(textLine('span', parts.month, 'date-month'));
+  block.appendChild(textLine('span', parts.day, 'date-day'));
+  return block;
+}
+
 function renderCalendar() {
   const grid = document.getElementById('calendar-grid');
   grid.innerHTML = '';
@@ -669,8 +933,16 @@ function renderCalendar() {
 
   inDateOrder.forEach(function (event) {
     const div = cardShell(event);
-    div.appendChild(textLine('strong', event.title));
-    div.appendChild(textLine('p', event.date));
+    if (isValidDate(event.date)) {
+      const parts = dateParts(event.date);
+      div.classList.add('dated');
+      div.appendChild(dateBlock(parts));
+      div.appendChild(textLine('strong', event.title));
+      div.appendChild(textLine('p', parts.weekday, 'meta'));
+    } else {
+      div.appendChild(textLine('strong', event.title));
+      div.appendChild(textLine('p', event.date, 'meta'));
+    }
 
     const linkedNote = findIn('notes', event.linkedNoteId);
     const linkedDeck = findIn('decks', event.linkedDeckId);
@@ -693,19 +965,29 @@ function renderCalendar() {
   });
 }
 
+function cardCount(count) {
+  if (count === 1) {
+    return '1 card';
+  }
+  return count + ' cards';
+}
+
 function renderFlashcards() {
   const list = document.getElementById('flashcards-list');
   list.innerHTML = '';
 
+  const motion = reviewMotion;
+  reviewMotion = null;
+
   if (reviewState) {
-    renderReview(list);
+    renderReview(list, motion);
     return;
   }
 
   vault.decks.forEach(function (deck) {
     const div = cardShell(deck);
     div.appendChild(textLine('strong', deck.name));
-    div.appendChild(textLine('p', deck.cards.length + ' card(s)'));
+    div.appendChild(textLine('p', cardCount(deck.cards.length), 'meta'));
 
     const linkedEvent = findIn('events', deck.linkedEventId);
     const linkedNote = findIn('notes', deck.linkedNoteId);
@@ -731,28 +1013,93 @@ function renderFlashcards() {
     addCardActions(div, actions);
     list.appendChild(div);
   });
+
+  if (motion === 'end') {
+    play(list, [{ opacity: 0 }, { opacity: 1 }], 180, EASE_OUT);
+  }
+}
+
+let seenIds = null;
+
+function cardTops() {
+  const tops = {};
+  document.querySelectorAll('.card[data-id]').forEach(function (card) {
+    if (card.offsetParent !== null) {
+      tops[card.getAttribute('data-id')] = card.getBoundingClientRect().top;
+    }
+  });
+  return tops;
+}
+
+function moveCards(before) {
+  document.querySelectorAll('.card[data-id]').forEach(function (card) {
+    if (card.offsetParent === null) {
+      return;
+    }
+    const id = card.getAttribute('data-id');
+    const oldTop = before[id];
+    if (oldTop === undefined) {
+      if (!seenIds[id]) {
+        play(card, [
+          { opacity: 0, transform: 'translateY(6px)' },
+          { opacity: 1, transform: 'none' },
+        ], 180, EASE_OUT);
+      }
+      return;
+    }
+    const shift = oldTop - card.getBoundingClientRect().top;
+    if (Math.abs(shift) > 1) {
+      play(card, [
+        { transform: 'translateY(' + shift + 'px)' },
+        { transform: 'none' },
+      ], 240, EASE_MOVE);
+    }
+  });
+}
+
+function rememberIds() {
+  seenIds = {};
+  forEachItem(function (item) {
+    seenIds[item.id] = true;
+  });
 }
 
 function renderAll() {
+  let before = null;
+  if (seenIds) {
+    before = cardTops();
+  }
+
   renderNotes();
   renderCalendar();
   renderFlashcards();
+
+  if (before) {
+    moveCards(before);
+  }
+  rememberIds();
+
+  giveFocusBack();
+  focusPending = false;
 }
 
 let reviewState = null;
+let reviewMotion = null;
 
 function startReview(deck) {
   reviewState = { deckId: deck.id, index: 0, revealed: false };
+  reviewMotion = 'start';
   showSection('flashcards');
   renderFlashcards();
 }
 
 function endReview() {
   reviewState = null;
+  reviewMotion = 'end';
   renderFlashcards();
 }
 
-function renderReview(list) {
+function renderReview(list, motion) {
   const deck = findIn('decks', reviewState.deckId);
   if (!deck || deck.cards.length === 0) {
     reviewState = null;
@@ -760,16 +1107,36 @@ function renderReview(list) {
     return;
   }
   const card = deck.cards[reviewState.index];
+  const total = deck.cards.length;
 
   const panel = document.createElement('div');
   panel.className = 'card review';
-  panel.appendChild(textLine('strong', deck.name));
-  panel.appendChild(textLine('p',
-    'Card ' + (reviewState.index + 1) + ' of ' + deck.cards.length, 'review-count'));
-  panel.appendChild(textLine('div', card.front, 'review-face'));
 
+  const head = document.createElement('div');
+  head.className = 'review-head';
+  head.appendChild(textLine('strong', deck.name));
+  head.appendChild(textLine('span',
+    'Card ' + (reviewState.index + 1) + ' of ' + total, 'review-count'));
+  panel.appendChild(head);
+
+  let answered = reviewState.index;
   if (reviewState.revealed) {
-    panel.appendChild(textLine('div', card.back, 'review-face review-back'));
+    answered = answered + 1;
+  }
+  const bar = document.createElement('div');
+  bar.className = 'review-progress';
+  const fill = document.createElement('span');
+  fill.style.transform = 'scaleX(' + (answered / total) + ')';
+  bar.appendChild(fill);
+  panel.appendChild(bar);
+
+  const front = textLine('div', card.front, 'review-face');
+  panel.appendChild(front);
+
+  let back = null;
+  if (reviewState.revealed) {
+    back = textLine('div', card.back, 'review-face review-back');
+    panel.appendChild(back);
   }
 
   const controls = document.createElement('div');
@@ -779,6 +1146,7 @@ function renderReview(list) {
   if (!reviewState.revealed) {
     controls.appendChild(textButton('Show answer', function () {
       reviewState.revealed = true;
+      reviewMotion = 'reveal';
       renderFlashcards();
     }, 'primary'));
   } else {
@@ -789,9 +1157,11 @@ function renderReview(list) {
     controls.appendChild(textButton(nextLabel, function () {
       if (isLast) {
         reviewState = null;
+        reviewMotion = 'end';
       } else {
         reviewState.index = reviewState.index + 1;
         reviewState.revealed = false;
+        reviewMotion = 'next';
       }
       renderFlashcards();
     }, 'primary'));
@@ -800,6 +1170,29 @@ function renderReview(list) {
   controls.appendChild(textButton('Done', endReview));
   panel.appendChild(controls);
   list.appendChild(panel);
+
+  if (motion === 'start') {
+    play(panel, [
+      { opacity: 0, transform: 'translateY(6px)' },
+      { opacity: 1, transform: 'none' },
+    ], 180, EASE_OUT);
+  }
+  if (motion === 'reveal') {
+    play(back, [
+      { opacity: 0, transform: 'translateY(-4px)' },
+      { opacity: 1, transform: 'none' },
+    ], 180, EASE_OUT);
+    play(fill, [
+      { transform: 'scaleX(' + ((answered - 1) / total) + ')' },
+      { transform: 'scaleX(' + (answered / total) + ')' },
+    ], 240, EASE_MOVE);
+  }
+  if (motion === 'next') {
+    play(front, [
+      { opacity: 0, transform: 'translateX(12px)' },
+      { opacity: 1, transform: 'none' },
+    ], 200, EASE_OUT);
+  }
 }
 
 function isValidDate(text) {
@@ -925,16 +1318,30 @@ function deckForm(deck) {
   });
 }
 
+async function askToDelete(label) {
+  const values = await openForm({
+    title: 'Delete "' + label + '"?',
+    submitLabel: 'Delete',
+    danger: true,
+    fields: [],
+  });
+  return values !== null;
+}
+
 async function confirmAndDelete(collection, item, label) {
-  if (!confirm('Delete "' + label + '"?')) {
+  const sure = await askToDelete(label);
+  if (!sure) {
     return;
   }
   if (reviewState && reviewState.deckId === item.id) {
     reviewState = null;
   }
+  await whenDone(playOut(cardEls[item.id], [
+    { opacity: 1, transform: 'none' },
+    { opacity: 0, transform: 'scale(0.98)' },
+  ], 140, EASE_IN));
   deleteItem(collection, item.id);
-  await saveVault();
-  renderAll();
+  await saveAndShow();
 }
 
 async function editNote(note) {
@@ -946,8 +1353,7 @@ async function editNote(note) {
   note.content = values.content;
   setLink(note, 'notes', 'events', values.event);
   setLink(note, 'notes', 'decks', values.deck);
-  await saveVault();
-  renderAll();
+  await saveAndShow();
 }
 
 async function editEvent(event) {
@@ -959,8 +1365,7 @@ async function editEvent(event) {
   event.date = values.date;
   setLink(event, 'events', 'notes', values.note);
   setLink(event, 'events', 'decks', values.deck);
-  await saveVault();
-  renderAll();
+  await saveAndShow();
 }
 
 async function editDeck(deck) {
@@ -975,8 +1380,7 @@ async function editDeck(deck) {
   if (reviewState && reviewState.deckId === deck.id) {
     reviewState = null;
   }
-  await saveVault();
-  renderAll();
+  await saveAndShow();
 }
 
 document.getElementById('add-note-btn').addEventListener('click', async function () {
@@ -994,8 +1398,7 @@ document.getElementById('add-note-btn').addEventListener('click', async function
   vault.notes.push(note);
   setLink(note, 'notes', 'events', values.event);
   setLink(note, 'notes', 'decks', values.deck);
-  await saveVault();
-  renderAll();
+  await saveAndShow();
 });
 
 document.getElementById('add-event-btn').addEventListener('click', async function () {
@@ -1013,8 +1416,7 @@ document.getElementById('add-event-btn').addEventListener('click', async functio
   vault.events.push(event);
   setLink(event, 'events', 'notes', values.note);
   setLink(event, 'events', 'decks', values.deck);
-  await saveVault();
-  renderAll();
+  await saveAndShow();
 });
 
 document.getElementById('add-deck-btn').addEventListener('click', async function () {
@@ -1032,8 +1434,7 @@ document.getElementById('add-deck-btn').addEventListener('click', async function
   vault.decks.push(deck);
   setLink(deck, 'decks', 'notes', values.note);
   setLink(deck, 'decks', 'events', values.event);
-  await saveVault();
-  renderAll();
+  await saveAndShow();
 });
 
 if ('serviceWorker' in navigator) {
